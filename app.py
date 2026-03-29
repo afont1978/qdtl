@@ -53,7 +53,9 @@ ROUTE_COLORS = {
 def init_state() -> None:
     ss = st.session_state
     ss.setdefault("scenario", "corridor_congestion")
+    ss.setdefault("scenario_ui", ss["scenario"])
     ss.setdefault("seed", 42)
+    ss.setdefault("seed_ui", int(ss["seed"]))
     ss.setdefault("running", False)
     ss.setdefault("sleep_s", 0.30)
     ss.setdefault("batch_steps", 4)
@@ -67,6 +69,18 @@ def rebuild_runtime() -> None:
     ss = st.session_state
     ss["rt"] = MobilityRuntime(scenario=ss["scenario"], seed=int(ss["seed"]))
     ss["running"] = False
+
+
+def apply_runtime_config() -> None:
+    ss = st.session_state
+    new_scenario = ss.get("scenario_ui", ss["scenario"])
+    new_seed = int(ss.get("seed_ui", ss["seed"]))
+    changed = (new_scenario != ss["scenario"]) or (new_seed != int(ss["seed"]))
+    ss["running"] = False
+    if changed:
+        ss["scenario"] = new_scenario
+        ss["seed"] = new_seed
+        rebuild_runtime()
 
 
 def get_df() -> pd.DataFrame:
@@ -873,22 +887,31 @@ ss = st.session_state
 
 with st.sidebar:
     st.markdown("## Control Panel")
-    selected_scenario = st.selectbox(
+    st.selectbox(
         "Scenario",
         options=list(SCENARIO_LABELS.keys()),
         format_func=lambda x: SCENARIO_LABELS[x],
-        index=list(SCENARIO_LABELS.keys()).index(ss["scenario"]),
+        index=list(SCENARIO_LABELS.keys()).index(ss["scenario_ui"]),
+        key="scenario_ui",
+        help="Changes are applied safely when you press Apply scenario / seed.",
     )
-    if selected_scenario != ss["scenario"]:
-        ss["scenario"] = selected_scenario
-        rebuild_runtime()
+
+    st.number_input(
+        "Simulation seed",
+        min_value=1,
+        max_value=999999,
+        value=int(ss["seed_ui"]),
+        step=1,
+        key="seed_ui",
+        help="Changes are applied safely when you press Apply scenario / seed.",
+    )
+
+    if st.button("Apply scenario / seed", use_container_width=True):
+        apply_runtime_config()
         st.rerun()
 
-    seed = st.number_input("Simulation seed", min_value=1, max_value=999999, value=int(ss["seed"]), step=1)
-    if int(seed) != int(ss["seed"]):
-        ss["seed"] = int(seed)
-        rebuild_runtime()
-        st.rerun()
+    if ss["scenario_ui"] != ss["scenario"] or int(ss["seed_ui"]) != int(ss["seed"]):
+        st.caption("Pending configuration change. Press Apply scenario / seed.")
 
     st.divider()
     ss["live_window"] = st.slider("Visible live window (steps)", 12, 96, int(ss["live_window"]), step=6)
@@ -928,7 +951,8 @@ st.markdown(
 
 @st.fragment(run_every=0.25)
 def live_fragment() -> None:
-    if ss["running"]:
+    pending_change = ss.get("scenario_ui", ss["scenario"]) != ss["scenario"] or int(ss.get("seed_ui", ss["seed"])) != int(ss["seed"])
+    if ss["running"] and not pending_change:
         ss["rt"].step()
     frag_df = get_df()
     frag_latest = latest_record(frag_df)
