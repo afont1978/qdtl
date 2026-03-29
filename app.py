@@ -1,3 +1,4 @@
+
 import json
 import time
 from typing import Any, Dict
@@ -21,6 +22,9 @@ st.markdown(
     .hero-subtitle {font-size:1rem; color:#C7D0DD;}
     .metric-card {padding:0.8rem 1rem; border-radius:16px; background:rgba(255,255,255,0.03);
                   border:1px solid rgba(255,255,255,0.06);}
+    .hotspot-box {padding:0.8rem 1rem; border-radius:16px; background:rgba(255,255,255,0.03);
+                  border:1px solid rgba(255,255,255,0.06); margin-bottom: 0.8rem;}
+    .small-note {color:#AEB8C7; font-size:0.92rem;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -160,6 +164,47 @@ def kpi_block(label: str, value: str, delta: str = "") -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def hotspot_map(lat: Any, lon: Any, label: str = "Hotspot") -> None:
+    try:
+        if lat is None or lon is None:
+            st.caption("No geolocation available for this hotspot.")
+            return
+        lat_f = float(lat)
+        lon_f = float(lon)
+        st.map(pd.DataFrame({"lat": [lat_f], "lon": [lon_f]}), zoom=12)
+        st.caption(f"{label}: {lat_f:.4f}, {lon_f:.4f}")
+    except Exception:
+        st.caption("No geolocation available for this hotspot.")
+
+
+def render_hotspot_card(name: Any, streets: Any = None, category: Any = None, why: Any = None, lat: Any = None, lon: Any = None, note: Any = None) -> None:
+    st.markdown('<div class="hotspot-box">', unsafe_allow_html=True)
+    st.markdown(f"### {name or 'No hotspot assigned'}")
+    if category:
+        st.write(f"**Category:** {category}")
+    if streets:
+        st.write(f"**Streets / environment:** {streets}")
+    if why:
+        st.write(f"**Operational relevance:** {why}")
+    if note:
+        st.caption(str(note))
+    st.markdown("</div>", unsafe_allow_html=True)
+    hotspot_map(lat, lon, label=str(name or 'Hotspot'))
+
+
+def extract_twin_hotspot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    md = snapshot.get("metadata", {}) if isinstance(snapshot, dict) else {}
+    return {
+        "name": md.get("hotspot_name") or md.get("scenario_hotspot_name") or snapshot.get("primary_hotspot_name"),
+        "lat": md.get("lat"),
+        "lon": md.get("lon"),
+        "category": md.get("category"),
+        "streets": md.get("streets"),
+        "why": md.get("why"),
+        "note": md.get("scenario_note"),
+    }
+
+
 init_state()
 ss = st.session_state
 
@@ -246,7 +291,7 @@ def render_overview(df_local: pd.DataFrame, latest_local: Dict[str, Any], render
     with row2[5]:
         kpi_block("Avg latency", f"{avg_latency:.0f} ms", f"Conf {mean_conf:.1f}%")
 
-    left, right = st.columns([2.2, 1.0])
+    left, right = st.columns([2.0, 1.0])
     with left:
         st.plotly_chart(make_overview_performance(live_df, key=f"mob_perf_{render_id}"), use_container_width=True, key=f"plot_mob_perf_{render_id}")
         c_a, c_b = st.columns(2)
@@ -274,10 +319,25 @@ def render_overview(df_local: pd.DataFrame, latest_local: Dict[str, Any], render
         st.markdown("### Why this route")
         st.caption(str(latest_local.get("route_reason", "No route reason available.")))
 
+    st.markdown("### Active Barcelona hotspot")
+    c1, c2 = st.columns([1.2, 1.0])
+    with c1:
+        render_hotspot_card(
+            latest_local.get("primary_hotspot_name"),
+            note=latest_local.get("scenario_note"),
+            lat=latest_local.get("primary_hotspot_lat"),
+            lon=latest_local.get("primary_hotspot_lon"),
+        )
+    with c2:
+        st.markdown("#### Scenario-linked hotspots")
+        hotspot_cols = [c for c in ["intersection_hotspot", "road_corridor_hotspot", "bus_corridor_hotspot", "curb_zone_hotspot", "risk_hotspot_name"] if c in latest_local]
+        for col in hotspot_cols:
+            st.write(f"**{col.replace('_', ' ').title()}:** {latest_local.get(col)}")
+
     snap_cols = [
-        "step_id", "mode", "scenario", "active_event", "network_speed_index",
-        "corridor_reliability_index", "bus_bunching_index", "curb_occupancy_rate",
-        "risk_score", "gateway_delay_index", "decision_route"
+        "step_id", "mode", "scenario", "active_event", "primary_hotspot_name",
+        "network_speed_index", "corridor_reliability_index", "bus_bunching_index",
+        "curb_occupancy_rate", "risk_score", "gateway_delay_index", "decision_route"
     ]
     snap_cols = [c for c in snap_cols if c in live_df.columns]
     st.dataframe(live_df[snap_cols].tail(12), use_container_width=True, height=320)
@@ -291,6 +351,9 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+if latest.get("scenario_note"):
+    st.caption(str(latest.get("scenario_note")))
 
 tab_overview, tab_twins, tab_risk, tab_audit = st.tabs(["Overview", "Mobility Twins", "Risk & Prevention", "Audit & Orchestration"])
 
@@ -317,6 +380,24 @@ with tab_twins:
     if df.empty:
         st.info("No simulation data yet.")
     else:
+        snapshot = snapshots.get(twin_sel, {})
+        hotspot = extract_twin_hotspot(snapshot)
+
+        c_top1, c_top2 = st.columns([1.2, 1.0])
+        with c_top1:
+            render_hotspot_card(
+                hotspot.get("name"),
+                streets=hotspot.get("streets"),
+                category=hotspot.get("category"),
+                why=hotspot.get("why"),
+                lat=hotspot.get("lat"),
+                lon=hotspot.get("lon"),
+                note=hotspot.get("note"),
+            )
+        with c_top2:
+            st.markdown("### Current twin snapshot")
+            st.json(snapshot)
+
         if twin_sel == "intersection":
             c1, c2 = st.columns(2)
             with c1:
@@ -347,27 +428,35 @@ with tab_twins:
                 st.plotly_chart(make_line_chart(df, "step_id", ["risk_score", "near_miss_index"], "Risk and near-miss", "index", "risk_main"), use_container_width=True, key="plot_risk_main")
             with c2:
                 st.plotly_chart(make_line_chart(df, "step_id", ["pedestrian_exposure", "bike_conflict_index"], "VRU exposure", "index", "risk_vru"), use_container_width=True, key="plot_risk_vru")
-        st.markdown("### Current twin snapshot")
-        st.json(snapshots.get(twin_sel, {}))
 
 with tab_risk:
     if df.empty:
         st.info("No simulation data yet.")
     else:
-        c1, c2 = st.columns(2)
+        c1, c2 = st.columns([1.6, 1.0])
         with c1:
-            st.plotly_chart(make_line_chart(df, "step_id", ["risk_score", "near_miss_index"], "Risk and early-warning state", "index", "risk_tab_main"), use_container_width=True, key="plot_risk_tab_main")
+            c11, c12 = st.columns(2)
+            with c11:
+                st.plotly_chart(make_line_chart(df, "step_id", ["risk_score", "near_miss_index"], "Risk and early-warning state", "index", "risk_tab_main"), use_container_width=True, key="plot_risk_tab_main")
+            with c12:
+                st.plotly_chart(make_line_chart(df, "step_id", ["pedestrian_exposure", "bike_conflict_index"], "Exposure of vulnerable users", "index", "risk_tab_vru"), use_container_width=True, key="plot_risk_tab_vru")
+            risk_view = df[[c for c in ["step_id", "active_event", "primary_hotspot_name", "risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index", "route_reason"] if c in df.columns]].tail(20)
+            st.dataframe(risk_view, use_container_width=True, height=320)
         with c2:
-            st.plotly_chart(make_line_chart(df, "step_id", ["pedestrian_exposure", "bike_conflict_index"], "Exposure of vulnerable users", "index", "risk_tab_vru"), use_container_width=True, key="plot_risk_tab_vru")
-        risk_view = df[["step_id", "active_event", "risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index", "route_reason"]].tail(20)
-        st.dataframe(risk_view, use_container_width=True, height=320)
+            st.markdown("### Current risk hotspot")
+            render_hotspot_card(
+                latest.get("risk_hotspot_name") or latest.get("primary_hotspot_name"),
+                note=latest.get("scenario_note"),
+                lat=latest.get("primary_hotspot_lat"),
+                lon=latest.get("primary_hotspot_lon"),
+            )
 
 with tab_audit:
     if df.empty:
         st.info("No records yet.")
     else:
         cols_to_show = [
-            "step_id", "ts", "mode", "scenario", "active_event", "decision_route",
+            "step_id", "ts", "mode", "scenario", "active_event", "primary_hotspot_name", "decision_route",
             "route_reason", "exec_ms", "decision_confidence", "fallback_triggered",
             "network_speed_index", "bus_bunching_index", "curb_occupancy_rate", "risk_score"
         ]
@@ -375,7 +464,7 @@ with tab_audit:
         st.dataframe(df[cols_to_show].tail(50), use_container_width=True, height=320)
         idx = st.number_input("Record index (0-based)", min_value=0, max_value=max(0, len(df) - 1), value=max(0, len(df) - 1), step=1)
         row = df.iloc[int(idx)]
-        c1, c2 = st.columns(2)
+        c1, c2 = st.columns([1.2, 1.0])
         with c1:
             st.markdown("### Decision summary")
             st.json({
@@ -383,6 +472,7 @@ with tab_audit:
                 "mode": row["mode"],
                 "scenario": row["scenario"],
                 "active_event": row["active_event"],
+                "primary_hotspot_name": row.get("primary_hotspot_name"),
                 "decision_route": row["decision_route"],
                 "route_reason": row["route_reason"],
                 "exec_ms": int(row["exec_ms"]),
@@ -390,7 +480,6 @@ with tab_audit:
                 "fallback_triggered": bool(row["fallback_triggered"]),
                 "fallback_reasons": row["fallback_reasons"],
             })
-        with c2:
             st.markdown("### Urban state snapshot")
             st.json({
                 "network_speed_index": float(row["network_speed_index"]),
@@ -402,6 +491,13 @@ with tab_audit:
                 "complexity_score": float(row["complexity_score"]),
                 "discrete_ratio": float(row["discrete_ratio"]),
             })
+        with c2:
+            render_hotspot_card(
+                row.get("primary_hotspot_name"),
+                note=row.get("scenario_note"),
+                lat=row.get("primary_hotspot_lat"),
+                lon=row.get("primary_hotspot_lon"),
+            )
         b1, b2 = st.columns(2)
         with b1:
             st.markdown("### Dispatch")
