@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
@@ -40,6 +42,59 @@ EventType = Literal[
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+@dataclass
+class Hotspot:
+    name: str
+    lat: float
+    lon: float
+    category: str
+    streets: str
+    why: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _default_hotspot_search_paths(explicit_path: Optional[str] = None) -> List[Path]:
+    here = Path(__file__).resolve().parent
+    candidates: List[Path] = []
+    if explicit_path:
+        candidates.append(Path(explicit_path))
+    candidates.extend([
+        here / "barcelona_mobility_hotspots.csv",
+        Path.cwd() / "barcelona_mobility_hotspots.csv",
+    ])
+    deduped: List[Path] = []
+    seen: set[str] = set()
+    for p in candidates:
+        key = str(p)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(p)
+    return deduped
+
+
+def load_barcelona_hotspots(explicit_path: Optional[str] = None) -> Dict[str, Hotspot]:
+    for candidate in _default_hotspot_search_paths(explicit_path):
+        if candidate.exists():
+            with candidate.open("r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                hotspots: Dict[str, Hotspot] = {}
+                for row in reader:
+                    hs = Hotspot(
+                        name=row["name"],
+                        lat=float(row["lat"]),
+                        lon=float(row["lon"]),
+                        category=row["category"],
+                        streets=row["streets"],
+                        why=row["why"],
+                    )
+                    hotspots[hs.name] = hs
+                if hotspots:
+                    return hotspots
+    return {}
 
 
 @dataclass
@@ -370,6 +425,15 @@ class MobilityExecRecord:
     route_reason: str
     complexity_score: float
     discrete_ratio: float
+    intersection_hotspot: str = ""
+    road_corridor_hotspot: str = ""
+    bus_corridor_hotspot: str = ""
+    curb_zone_hotspot: str = ""
+    risk_hotspot_name: str = ""
+    primary_hotspot_name: str = ""
+    primary_hotspot_lat: float = 41.3851
+    primary_hotspot_lon: float = 2.1734
+    scenario_note: str = ""
     qre_json: Optional[str] = None
     result_json: Optional[str] = None
     dispatch_json: Optional[str] = None
@@ -595,14 +659,16 @@ class MobilityHybridOrchestrator:
 
 
 class MobilityRuntime:
-    def __init__(self, scenario: ScenarioName = "corridor_congestion", seed: int = 42):
+    def __init__(self, scenario: ScenarioName = "corridor_congestion", seed: int = 42, hotspots_csv: Optional[str] = None):
         self.scenario = scenario
         self.seed = int(seed)
+        self.hotspots_csv = hotspots_csv
         self.rng = np.random.default_rng(self.seed)
         self.step_id = 0
         self.cumulative_operational_score = 0.0
         self.orchestrator = MobilityHybridOrchestrator(seed=self.seed)
         self.records: List[MobilityExecRecord] = []
+        self.hotspots: Dict[str, Hotspot] = load_barcelona_hotspots(hotspots_csv)
         self.twins: Dict[str, TwinBase] = {}
         self._build_twins()
 
@@ -616,6 +682,100 @@ class MobilityRuntime:
             "risk_hotspot": RiskHotspotTwin("risk_hotspot", "risk_hotspot", "Risk Hotspot", ts),
             "city_mobility_system": CityMobilitySystemTwin("city_mobility_system", "city_mobility_system", "City Mobility System", ts),
         }
+        self._attach_hotspots_to_twins()
+
+    def _hotspot(self, name: str) -> Optional[Hotspot]:
+        return self.hotspots.get(name)
+
+    def _scenario_hotspot_names(self) -> Dict[str, str]:
+        mappings: Dict[ScenarioName, Dict[str, str]] = {
+            "corridor_congestion": {
+                "intersection": "Plaça de les Glòries Catalanes",
+                "road_corridor": "Plaça de les Glòries Catalanes",
+                "bus_corridor": "Plaça de les Glòries Catalanes",
+                "curb_zone": "Plaça de Catalunya / Ronda Universitat",
+                "risk_hotspot": "Plaça d'Espanya",
+            },
+            "school_area_risk": {
+                "intersection": "Plaça de Catalunya / Ronda Universitat",
+                "road_corridor": "Plaça de Catalunya / Ronda Universitat",
+                "bus_corridor": "Sants Estació / Plaça dels Països Catalans",
+                "curb_zone": "Plaça de Catalunya / Ronda Universitat",
+                "risk_hotspot": "Plaça de Catalunya / Ronda Universitat",
+            },
+            "urban_logistics_saturation": {
+                "intersection": "Plaça Cerdà / Passeig de la Zona Franca",
+                "road_corridor": "Ronda del Port VI / Carrer 3 (Puertas 29-30)",
+                "bus_corridor": "Paral·lel / Port Vell / salida 21 Ronda Litoral",
+                "curb_zone": "Plaça Cerdà / Passeig de la Zona Franca",
+                "risk_hotspot": "Paral·lel / Port Vell / salida 21 Ronda Litoral",
+            },
+            "gateway_access_stress": {
+                "intersection": "Plaça Cerdà / Passeig de la Zona Franca",
+                "road_corridor": "Aeropuerto Josep Tarradellas BCN-El Prat T1",
+                "bus_corridor": "Aeropuerto Josep Tarradellas BCN-El Prat T2",
+                "curb_zone": "Aeropuerto Josep Tarradellas BCN-El Prat T1",
+                "risk_hotspot": "Moll Adossat / Port Creuers (Puerta 2)",
+            },
+            "event_mobility": {
+                "intersection": "Plaça d'Espanya",
+                "road_corridor": "Plaça de Catalunya / Ronda Universitat",
+                "bus_corridor": "Sants Estació / Plaça dels Països Catalans",
+                "curb_zone": "Plaça de Catalunya / Ronda Universitat",
+                "risk_hotspot": "Plaça d'Espanya",
+            },
+        }
+        return mappings[self.scenario]
+
+    def _scenario_note(self) -> str:
+        notes = {
+            "corridor_congestion": "Scenario anchored to Glòries as a primary corridor/interchange hotspot, with support nodes at Plaça de Catalunya and Plaça d'Espanya.",
+            "school_area_risk": "No school-specific hotspot exists in the CSV yet, so the scenario uses Plaça de Catalunya as a high-pedestrian proxy hotspot until a school-zone layer is added.",
+            "urban_logistics_saturation": "Scenario anchored to Plaça Cerdà, Ronda del Port VI and Port Vell as Barcelona logistics and curbside pressure nodes.",
+            "gateway_access_stress": "Scenario anchored to airport terminals T1/T2 and cruise/port access nodes as Barcelona gateway hotspots.",
+            "event_mobility": "Scenario anchored to Plaça d'Espanya, Plaça de Catalunya and Sants as high-pressure event and intermodal redistribution nodes.",
+        }
+        return notes[self.scenario]
+
+    def _attach_hotspots_to_twins(self) -> None:
+        mapping = self._scenario_hotspot_names()
+        note = self._scenario_note()
+        for twin_id in ["intersection", "road_corridor", "bus_corridor", "curb_zone", "risk_hotspot"]:
+            hotspot_name = mapping[twin_id]
+            hotspot = self._hotspot(hotspot_name)
+            meta: Dict[str, Any] = {
+                "scenario_hotspot_name": hotspot_name,
+                "scenario_note": note,
+            }
+            if hotspot is not None:
+                meta.update({
+                    "hotspot_name": hotspot.name,
+                    "lat": hotspot.lat,
+                    "lon": hotspot.lon,
+                    "category": hotspot.category,
+                    "streets": hotspot.streets,
+                    "why": hotspot.why,
+                })
+            self.twins[twin_id].metadata.update(meta)
+
+    def hotspot_dataframe(self) -> pd.DataFrame:
+        mapping = self._scenario_hotspot_names()
+        rows: List[Dict[str, Any]] = []
+        for twin_id, hotspot_name in mapping.items():
+            hotspot = self._hotspot(hotspot_name)
+            if hotspot is None:
+                continue
+            rows.append({
+                "twin_id": twin_id,
+                "hotspot_name": hotspot.name,
+                "lat": hotspot.lat,
+                "lon": hotspot.lon,
+                "category": hotspot.category,
+                "streets": hotspot.streets,
+                "why": hotspot.why,
+                "scenario": self.scenario,
+            })
+        return pd.DataFrame(rows)
 
     def _mode_for_scenario(self) -> Mode:
         if self.scenario == "school_area_risk":
@@ -757,11 +917,23 @@ class MobilityRuntime:
         gateway_delay_index = float(np.clip(0.18 + 0.65 * ctx.gateway_ops["surge_factor"] + 0.12 * corridor.queue_spillback_risk, 0.0, 1.0))
         coordination_flag = bus.bunching_index > 0.28 and corridor.queue_spillback_risk > 0.35
         logistics_pressure_flag = curb.delivery_queue > 8.0 or curb.illegal_occupancy_rate > 0.22
+        hotspot_map = self._scenario_hotspot_names()
+        primary_name = hotspot_map["road_corridor"]
+        primary_hotspot = self._hotspot(primary_name)
         return {
             "ts": utc_now_iso(),
             "mode": ctx.mode,
             "scenario": ctx.scenario,
+            "scenario_note": self._scenario_note(),
             "active_event": active_event,
+            "intersection_hotspot": hotspot_map["intersection"],
+            "road_corridor_hotspot": hotspot_map["road_corridor"],
+            "bus_corridor_hotspot": hotspot_map["bus_corridor"],
+            "curb_zone_hotspot": hotspot_map["curb_zone"],
+            "risk_hotspot_name": hotspot_map["risk_hotspot"],
+            "primary_hotspot_name": primary_name,
+            "primary_hotspot_lat": primary_hotspot.lat if primary_hotspot else 41.3851,
+            "primary_hotspot_lon": primary_hotspot.lon if primary_hotspot else 2.1734,
             "network_speed_index": network_speed_index,
             "corridor_reliability_index": corridor_reliability_index,
             "corridor_delay_s": corridor.travel_time_index * 75.0,
@@ -832,6 +1004,12 @@ class MobilityRuntime:
             "incident_flag": state["incident_flag"],
             "rain_flag": state["rain_flag"],
             "school_peak_flag": state["school_peak_flag"],
+            "primary_hotspot_name": state["primary_hotspot_name"],
+            "intersection_hotspot": state["intersection_hotspot"],
+            "road_corridor_hotspot": state["road_corridor_hotspot"],
+            "bus_corridor_hotspot": state["bus_corridor_hotspot"],
+            "curb_zone_hotspot": state["curb_zone_hotspot"],
+            "risk_hotspot_name": state["risk_hotspot_name"],
         }
         return MobilityDispatchProblem(
             step_id=self.step_id,
@@ -903,6 +1081,15 @@ class MobilityRuntime:
             route_reason=decision["route_reason"],
             complexity_score=problem.complexity_score,
             discrete_ratio=problem.discrete_ratio,
+            intersection_hotspot=state["intersection_hotspot"],
+            road_corridor_hotspot=state["road_corridor_hotspot"],
+            bus_corridor_hotspot=state["bus_corridor_hotspot"],
+            curb_zone_hotspot=state["curb_zone_hotspot"],
+            risk_hotspot_name=state["risk_hotspot_name"],
+            primary_hotspot_name=state["primary_hotspot_name"],
+            primary_hotspot_lat=state["primary_hotspot_lat"],
+            primary_hotspot_lon=state["primary_hotspot_lon"],
+            scenario_note=state["scenario_note"],
             qre_json=decision["qre_json"],
             result_json=decision["result_json"],
             dispatch_json=json.dumps(decision["dispatch"], ensure_ascii=False),
@@ -937,11 +1124,12 @@ class MobilityRuntime:
     def reset(self) -> None:
         scenario = self.scenario
         seed = self.seed
-        self.__init__(scenario=scenario, seed=seed)
+        hotspots_csv = self.hotspots_csv
+        self.__init__(scenario=scenario, seed=seed, hotspots_csv=hotspots_csv)
 
 
-def run_demo(steps: int = 48, scenario: ScenarioName = "corridor_congestion", seed: int = 42) -> pd.DataFrame:
-    rt = MobilityRuntime(scenario=scenario, seed=seed)
+def run_demo(steps: int = 48, scenario: ScenarioName = "corridor_congestion", seed: int = 42, hotspots_csv: Optional[str] = None) -> pd.DataFrame:
+    rt = MobilityRuntime(scenario=scenario, seed=seed, hotspots_csv=hotspots_csv)
     for _ in range(steps):
         rt.step()
     return rt.dataframe()
