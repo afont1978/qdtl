@@ -62,6 +62,7 @@ def init_state() -> None:
     ss.setdefault("live_window", 36)
     ss.setdefault("mobility_twin_sel", "intersection")
     ss.setdefault("live_focus", "Overview")
+    ss.setdefault("detailed_live_view", "Off")
     ss.setdefault("rt", MobilityRuntime(scenario=ss["scenario"], seed=ss["seed"]))
 
 
@@ -870,6 +871,163 @@ def detailed_risk_live_fragment() -> None:
         }), height=220, use_container_width=True)
 
 
+
+
+def render_overview_full_live_native(df_local: pd.DataFrame, latest_local: Dict[str, Any]) -> None:
+    if df_local.empty:
+        st.info("No simulation data yet. Press Step or Start.")
+        return
+    live_df = df_local.tail(int(st.session_state["live_window"])).copy()
+    if "step_id" in live_df.columns:
+        live_df = live_df.set_index("step_id")
+
+    q_share = (df_local["decision_route"] == "QUANTUM").mean() * 100.0 if len(df_local) else 0.0
+    fb_rate = df_local["fallback_triggered"].mean() * 100.0 if len(df_local) else 0.0
+    avg_latency = float(df_local["exec_ms"].tail(24).mean()) if len(df_local) else 0.0
+    mean_conf = float(df_local["decision_confidence"].tail(24).mean() * 100.0) if len(df_local) else 0.0
+
+    row1 = st.columns(6)
+    row1[0].metric("Mode", MODE_LABELS.get(str(latest_local.get("mode", "")), str(latest_local.get("mode", ""))))
+    row1[1].metric("Network speed", f"{latest_local.get('network_speed_index', 0.0):.2f}")
+    row1[2].metric("Corridor reliability", f"{latest_local.get('corridor_reliability_index', 0.0):.2f}")
+    row1[3].metric("Bus bunching", f"{latest_local.get('bus_bunching_index', 0.0):.2f}")
+    row1[4].metric("Curb occupancy", f"{latest_local.get('curb_occupancy_rate', 0.0)*100:.1f}%")
+    row1[5].metric("Risk score", f"{latest_local.get('risk_score', 0.0):.2f}")
+
+    row2 = st.columns(4)
+    row2[0].metric("Quantum share", f"{q_share:.1f}%")
+    row2[1].metric("Fallback rate", f"{fb_rate:.1f}%")
+    row2[2].metric("Avg latency", f"{avg_latency:.0f} ms")
+    row2[3].metric("Mean confidence", f"{mean_conf:.1f}%")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.line_chart(_native_line(live_df, {
+            'network_speed_index': 'Network speed',
+            'corridor_reliability_index': 'Corridor reliability',
+            'step_operational_score': 'Operational score',
+        }), height=260, use_container_width=True)
+        st.line_chart(_native_line(live_df, {
+            'bus_bunching_index': 'Bus bunching',
+            'bus_commercial_speed_kmh': 'Bus commercial speed',
+        }), height=260, use_container_width=True)
+    with c2:
+        st.line_chart(_native_line(live_df, {
+            'curb_occupancy_rate': 'Curb occupancy',
+            'illegal_curb_occupancy_rate': 'Illegal curb occupancy',
+            'delivery_queue': 'Delivery queue',
+        }), height=260, use_container_width=True)
+        st.line_chart(_native_line(live_df, {
+            'risk_score': 'Risk score',
+            'near_miss_index': 'Near-miss',
+            'gateway_delay_index': 'Gateway delay',
+        }), height=260, use_container_width=True)
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.bar_chart(route_counts(df_local).set_index('route'), height=220, use_container_width=True)
+    with c4:
+        st.bar_chart(event_counts(df_local).set_index('event'), height=220, use_container_width=True)
+
+    st.caption(str(latest_local.get("route_reason", "")))
+
+
+def render_twin_full_live_native(df_local: pd.DataFrame, twin_sel: str) -> None:
+    if df_local.empty:
+        st.info("No simulation data yet.")
+        return
+    live_df = df_local.tail(int(st.session_state["live_window"])).copy()
+    if 'step_id' in live_df.columns:
+        live_df = live_df.set_index('step_id')
+
+    st.markdown(f"### Live evolution — {twin_sel.replace('_', ' ').title()}")
+    if twin_sel == 'intersection':
+        c1, c2 = st.columns(2)
+        with c1:
+            st.line_chart(_native_line(live_df, {'corridor_delay_s': 'Delay s'}), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'risk_score': 'Risk score'}), height=250, use_container_width=True)
+        with c2:
+            st.line_chart(_native_line(live_df, {'network_speed_index': 'Network speed'}), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'corridor_reliability_index': 'Corridor reliability'}), height=250, use_container_width=True)
+    elif twin_sel == 'road_corridor':
+        c1, c2 = st.columns(2)
+        with c1:
+            st.line_chart(_native_line(live_df, {
+                'network_speed_index': 'Network speed',
+                'corridor_reliability_index': 'Reliability',
+            }), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'gateway_delay_index': 'Gateway delay'}), height=250, use_container_width=True)
+        with c2:
+            st.line_chart(_native_line(live_df, {'bus_bunching_index': 'Bus bunching'}), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'risk_score': 'Risk score'}), height=250, use_container_width=True)
+    elif twin_sel == 'bus_corridor':
+        c1, c2 = st.columns(2)
+        with c1:
+            st.line_chart(_native_line(live_df, {'bus_bunching_index': 'Bunching'}), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'bus_commercial_speed_kmh': 'Commercial speed'}), height=250, use_container_width=True)
+        with c2:
+            st.line_chart(_native_line(live_df, {'bus_priority_requests': 'Priority requests'}), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'corridor_reliability_index': 'Corridor reliability'}), height=250, use_container_width=True)
+    elif twin_sel == 'curb_zone':
+        c1, c2 = st.columns(2)
+        with c1:
+            st.line_chart(_native_line(live_df, {'curb_occupancy_rate': 'Occupancy'}), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'illegal_curb_occupancy_rate': 'Illegal occupancy'}), height=250, use_container_width=True)
+        with c2:
+            st.line_chart(_native_line(live_df, {'delivery_queue': 'Delivery queue'}), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'risk_score': 'Risk score'}), height=250, use_container_width=True)
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.line_chart(_native_line(live_df, {'risk_score': 'Risk score'}), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'near_miss_index': 'Near-miss'}), height=250, use_container_width=True)
+        with c2:
+            st.line_chart(_native_line(live_df, {'pedestrian_exposure': 'Ped exposure'}), height=250, use_container_width=True)
+            st.line_chart(_native_line(live_df, {'bike_conflict_index': 'Bike conflict'}), height=250, use_container_width=True)
+
+
+def render_risk_full_live_native(df_local: pd.DataFrame, latest_local: Dict[str, Any]) -> None:
+    if df_local.empty:
+        st.info("No simulation data yet.")
+        return
+    live_df = df_local.tail(int(st.session_state["live_window"])).copy()
+    if 'step_id' in live_df.columns:
+        live_df = live_df.set_index('step_id')
+
+    row = st.columns(4)
+    row[0].metric('Risk', f"{latest_local.get('risk_score', 0.0):.2f}")
+    row[1].metric('Near-miss', f"{latest_local.get('near_miss_index', 0.0):.2f}")
+    row[2].metric('Ped exposure', f"{latest_local.get('pedestrian_exposure', 0.0):.2f}")
+    row[3].metric('Bike conflict', f"{latest_local.get('bike_conflict_index', 0.0):.2f}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.line_chart(_native_line(live_df, {'risk_score': 'Risk score'}), height=250, use_container_width=True)
+        st.line_chart(_native_line(live_df, {'near_miss_index': 'Near-miss'}), height=250, use_container_width=True)
+    with c2:
+        st.line_chart(_native_line(live_df, {'pedestrian_exposure': 'Pedestrian exposure'}), height=250, use_container_width=True)
+        st.line_chart(_native_line(live_df, {'bike_conflict_index': 'Bike conflict'}), height=250, use_container_width=True)
+
+    st.caption(str(latest_local.get('route_reason', '')))
+
+
+@st.fragment(run_every=0.9)
+def detailed_overview_full_live_fragment() -> None:
+    if st.session_state.get('running') and st.session_state.get('detailed_live_view') == 'Overview':
+        render_overview_full_live_native(get_df(), latest_record(get_df()))
+
+
+@st.fragment(run_every=0.9)
+def detailed_twins_full_live_fragment(twin_sel: str) -> None:
+    if st.session_state.get('running') and st.session_state.get('detailed_live_view') == 'Mobility Twins':
+        render_twin_full_live_native(get_df(), twin_sel)
+
+
+@st.fragment(run_every=0.9)
+def detailed_risk_full_live_fragment() -> None:
+    if st.session_state.get('running') and st.session_state.get('detailed_live_view') == 'Risk & Prevention':
+        render_risk_full_live_native(get_df(), latest_record(get_df()))
+
 init_state()
 ss = st.session_state
 
@@ -915,6 +1073,7 @@ with st.sidebar:
     st.divider()
     ss["live_window"] = st.slider("Visible live window (steps)", 12, 96, int(ss["live_window"]), step=6)
     ss["live_focus"] = st.selectbox("Live focus", ["Overview", "Mobility Twins", "Risk & Prevention"], index=["Overview", "Mobility Twins", "Risk & Prevention"].index(ss["live_focus"]))
+    ss["detailed_live_view"] = st.selectbox("Detailed view live", ["Off", "Overview", "Mobility Twins", "Risk & Prevention"], index=["Off", "Overview", "Mobility Twins", "Risk & Prevention"].index(ss["detailed_live_view"]))
 
     st.divider()
     c1, c2 = st.columns(2)
@@ -963,8 +1122,8 @@ latest = latest_record(df)
 if latest.get("scenario_note"):
     st.caption(str(latest.get("scenario_note")))
 
-st.markdown("### Detailed views (stable snapshots)")
-st.caption("These tabs are kept stable to minimize flicker. The live evolution is shown above in Live Monitor.")
+st.markdown("### Detailed views")
+st.caption("To keep flicker low, only one detailed view can animate at a time. Select it in sidebar under Detailed view live.")
 
 tab_overview, tab_twins, tab_risk, tab_audit = st.tabs(
     ["Overview", "Mobility Twins", "Risk & Prevention", "Audit & Orchestration"]
@@ -973,8 +1132,27 @@ tab_overview, tab_twins, tab_risk, tab_audit = st.tabs(
 snapshots = ss["rt"].twin_snapshot()
 
 with tab_overview:
-    detailed_overview_live_fragment()
-    render_overview(df, latest, render_id="static")
+    if ss["detailed_live_view"] == "Overview":
+        detailed_overview_full_live_fragment()
+        c_static1, c_static2 = st.columns([1.2, 1.0])
+        with c_static1:
+            render_hotspot_card(
+                latest.get("primary_hotspot_name"),
+                note=latest.get("scenario_note"),
+                lat=latest.get("primary_hotspot_lat"),
+                lon=latest.get("primary_hotspot_lon"),
+            )
+        with c_static2:
+            st.markdown("### Current decision")
+            st.write(f"**Route:** {latest.get('decision_route', '')}")
+            st.write(f"**Confidence:** {latest.get('decision_confidence', 0.0)*100:.1f}%")
+            st.write(f"**Latency:** {latest.get('exec_ms', 0)} ms")
+            st.write(f"**Fallback:** {'Yes' if latest.get('fallback_triggered', False) else 'No'}")
+            st.write(f"**Active event:** {latest.get('active_event', 'none') or 'none'}")
+            st.markdown("### Why this route")
+            st.caption(str(latest.get("route_reason", "No route reason available.")))
+    else:
+        render_overview(df, latest, render_id="static")
 
 with tab_twins:
     st.selectbox(
@@ -983,12 +1161,41 @@ with tab_twins:
         index=["intersection", "road_corridor", "bus_corridor", "curb_zone", "risk_hotspot"].index(ss["mobility_twin_sel"]),
         key="mobility_twin_sel",
     )
-    detailed_twin_live_fragment(ss["mobility_twin_sel"])
-    render_twins_panel(df, snapshots, ss["mobility_twin_sel"], render_id="static")
+    if ss["detailed_live_view"] == "Mobility Twins":
+        detailed_twins_full_live_fragment(ss["mobility_twin_sel"])
+        snapshot = snapshots.get(ss["mobility_twin_sel"], {})
+        latest_row = latest if latest else {}
+        hotspot = extract_twin_hotspot(snapshot)
+        c_top1, c_top2 = st.columns([1.0, 1.2])
+        with c_top1:
+            render_hotspot_card(
+                hotspot.get("name"),
+                streets=hotspot.get("streets"),
+                category=hotspot.get("category"),
+                why=hotspot.get("why"),
+                lat=hotspot.get("lat"),
+                lon=hotspot.get("lon"),
+                note=hotspot.get("note"),
+            )
+        with c_top2:
+            render_twin_summary(ss["mobility_twin_sel"], snapshot, latest_row)
+    else:
+        render_twins_panel(df, snapshots, ss["mobility_twin_sel"], render_id="static")
 
 with tab_risk:
-    detailed_risk_live_fragment()
-    render_risk_panel(df, latest, render_id="static")
+    if ss["detailed_live_view"] == "Risk & Prevention":
+        detailed_risk_full_live_fragment()
+        st.markdown("### Current risk hotspot")
+        render_hotspot_card(
+            latest.get("risk_hotspot_name") or latest.get("primary_hotspot_name"),
+            note=latest.get("scenario_note"),
+            lat=latest.get("primary_hotspot_lat"),
+            lon=latest.get("primary_hotspot_lon"),
+        )
+        risk_view = df[[c for c in ["step_id", "active_event", "primary_hotspot_name", "risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index", "route_reason"] if c in df.columns]].tail(20)
+        st.dataframe(risk_view, use_container_width=True, height=320)
+    else:
+        render_risk_panel(df, latest, render_id="static")
 
 with tab_audit:
     render_audit_panel(df)
