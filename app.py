@@ -71,18 +71,6 @@ def rebuild_runtime() -> None:
     ss["running"] = False
 
 
-def apply_runtime_config() -> None:
-    ss = st.session_state
-    new_scenario = ss.get("scenario_ui", ss["scenario"])
-    new_seed = int(ss.get("seed_ui", ss["seed"]))
-    changed = (new_scenario != ss["scenario"]) or (new_seed != int(ss["seed"]))
-    ss["running"] = False
-    if changed:
-        ss["scenario"] = new_scenario
-        ss["seed"] = new_seed
-        rebuild_runtime()
-
-
 def get_df() -> pd.DataFrame:
     df = st.session_state["rt"].dataframe()
     return df.copy() if not df.empty else pd.DataFrame()
@@ -885,32 +873,43 @@ def detailed_risk_live_fragment() -> None:
 init_state()
 ss = st.session_state
 
+def apply_runtime_config() -> None:
+    ss = st.session_state
+    new_scenario = ss.get("scenario_ui", ss["scenario"])
+    new_seed = int(ss.get("seed_ui", ss["seed"]))
+    changed = (new_scenario != ss["scenario"]) or (new_seed != int(ss["seed"]))
+    ss["running"] = False
+    if changed:
+        ss["scenario"] = new_scenario
+        ss["seed"] = new_seed
+        rebuild_runtime()
+
 with st.sidebar:
     st.markdown("## Control Panel")
-    st.selectbox(
-        "Scenario",
-        options=list(SCENARIO_LABELS.keys()),
-        format_func=lambda x: SCENARIO_LABELS[x],
-        index=list(SCENARIO_LABELS.keys()).index(ss["scenario_ui"]),
-        key="scenario_ui",
-        help="Changes are applied safely when you press Apply scenario / seed.",
-    )
 
-    st.number_input(
-        "Simulation seed",
-        min_value=1,
-        max_value=999999,
-        value=int(ss["seed_ui"]),
-        step=1,
-        key="seed_ui",
-        help="Changes are applied safely when you press Apply scenario / seed.",
-    )
+    with st.form("runtime_config_form", clear_on_submit=False):
+        st.selectbox(
+            "Scenario",
+            options=list(SCENARIO_LABELS.keys()),
+            format_func=lambda x: SCENARIO_LABELS[x],
+            index=list(SCENARIO_LABELS.keys()).index(ss.get("scenario_ui", ss["scenario"])),
+            key="scenario_ui",
+            help="Changes are only applied when you press Apply scenario / seed.",
+        )
+        st.number_input(
+            "Simulation seed",
+            min_value=1,
+            max_value=999999,
+            value=int(ss.get("seed_ui", ss["seed"])),
+            step=1,
+            key="seed_ui",
+            help="Changes are only applied when you press Apply scenario / seed.",
+        )
+        applied = st.form_submit_button("Apply scenario / seed", use_container_width=True)
+        if applied:
+            apply_runtime_config()
 
-    if st.button("Apply scenario / seed", use_container_width=True):
-        apply_runtime_config()
-        st.rerun()
-
-    if ss["scenario_ui"] != ss["scenario"] or int(ss["seed_ui"]) != int(ss["seed"]):
+    if ss.get("scenario_ui", ss["scenario"]) != ss["scenario"] or int(ss.get("seed_ui", ss["seed"])) != int(ss["seed"]):
         st.caption("Pending configuration change. Press Apply scenario / seed.")
 
     st.divider()
@@ -951,8 +950,7 @@ st.markdown(
 
 @st.fragment(run_every=0.25)
 def live_fragment() -> None:
-    pending_change = ss.get("scenario_ui", ss["scenario"]) != ss["scenario"] or int(ss.get("seed_ui", ss["seed"])) != int(ss["seed"])
-    if ss["running"] and not pending_change:
+    if ss["running"]:
         ss["rt"].step()
     frag_df = get_df()
     frag_latest = latest_record(frag_df)
