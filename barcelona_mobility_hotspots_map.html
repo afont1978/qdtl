@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Barcelona Mobility Hotspots</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  html, body, #map {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+  .legend {
+    position: absolute;
+    z-index: 9999;
+    background: rgba(255,255,255,0.95);
+    padding: 10px 12px;
+    border-radius: 8px;
+    right: 12px;
+    top: 12px;
+    max-width: 320px;
+    font-family: Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.35;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+  }
+  .legend h3 {
+    margin: 0 0 8px 0;
+    font-size: 15px;
+  }
+  .legend .note {
+    color: #444;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="legend">
+  <h3>Barcelona Mobility Hotspots</h3>
+  <div>Mapa base con nodos operativos y hotspots propuestos para un MVP de control room de movilidad.</div>
+  <div class="note" style="margin-top:8px;">
+    Coordenadas aproximadas. Los puntos representan nodos operativos, intermodales, logísticos y de riesgo potencial; no constituyen un ranking oficial de siniestralidad.
+  </div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  var map = L.map('map').setView([41.3851, 2.1734], 12);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  L.marker([41.375, 2.1494]).addTo(map).bindPopup('     <b>Plaça d\'Espanya</b><br>     <b>Categoría:</b> Intermodal / bus / congestión<br>     <b>Calles / entorno:</b> Plaça d\'Espanya, Gran Via de les Corts Catalanes, av. del Paral·lel, av. de la Reina Maria Cristina<br>     <b>Relevancia operativa:</b> Nodo prioritario para control multimodal. El Ayuntamiento impulsa un nuevo intercambiador de transporte público para integrar servicios urbanos e interurbanos y reducir la presión de buses, congestión y ocupación de aceras en el entorno.     ');
+L.marker([41.4036, 2.1906]).addTo(map).bindPopup('     <b>Plaça de les Glòries Catalanes</b><br>     <b>Categoría:</b> Intercambiador / bus / tranvía / metro<br>     <b>Calles / entorno:</b> Plaça de les Glòries Catalanes, Gran Via, av. Diagonal, av. Meridiana<br>     <b>Relevancia operativa:</b> Hotspot operativo claro para el MVP. El nuevo intercambiador de Glòries integra autobuses, metro L1 y Tram; afecta a líneas H12, 7, N2 y N7 y funciona como punto de conexión de alta sensibilidad para tráfico, bus y peatón.     ');
+L.marker([41.3791, 2.1406]).addTo(map).bindPopup('     <b>Sants Estació / Plaça dels Països Catalans</b><br>     <b>Categoría:</b> Gran nodo intermodal<br>     <b>Calles / entorno:</b> Plaça dels Països Catalans, carrer de Viriat, entorn de Barcelona-Sants<br>     <b>Relevancia operativa:</b> Gran hub intermodal con tren de alta velocidad, Rodalies, metro, bus, movilidad a pie y en bici. Es un candidato natural para gestión de presión intermodal y accesibilidad.     ');
+L.marker([41.387, 2.1699]).addTo(map).bindPopup('     <b>Plaça de Catalunya / Ronda Universitat</b><br>     <b>Categoría:</b> Centro urbano / bus aeropuerto / turismo<br>     <b>Calles / entorno:</b> Plaça de Catalunya, Ronda Universitat, La Rambla, Portal de l\'Àngel<br>     <b>Relevancia operativa:</b> Nodo de máxima intensidad peatonal y turística. Aena identifica Plaça de Catalunya (Ronda Universitat) como cabecera del N18 al aeropuerto; además es un punto muy sensible para gestión multimodal, taxi/VTC y saturación peatonal.     ');
+L.marker([41.3598, 2.1391]).addTo(map).bindPopup('     <b>Plaça Cerdà / Passeig de la Zona Franca</b><br>     <b>Categoría:</b> Acceso logístico / portuario<br>     <b>Calles / entorno:</b> Plaça Cerdà, passeig de la Zona Franca<br>     <b>Relevancia operativa:</b> Nodo crítico de acceso logístico y de distribución. El Port de Barcelona indica la salida 18 Zona Franca / Plaça Cerdà como acceso clave hacia Zona Franca, Mercabarna y puerto.     ');
+L.marker([41.3338, 2.151]).addTo(map).bindPopup('     <b>Ronda del Port VI / Carrer 3 (Puertas 29-30)</b><br>     <b>Categoría:</b> Acceso puerto mercancías<br>     <b>Calles / entorno:</b> Ronda del Port VI, carrer 3<br>     <b>Relevancia operativa:</b> Acceso operacional clave al puerto. Las puertas 29 y 30 son las indicadas para APM, BEST y terminales de automóviles y graneles líquidos; es un hotspot claro para tráfico pesado y coordinación logística.     ');
+L.marker([41.3498, 2.1534]).addTo(map).bindPopup('     <b>Moll Adossat / Port Creuers (Puerta 2)</b><br>     <b>Categoría:</b> Acceso cruceros / pasajeros<br>     <b>Calles / entorno:</b> Moll Adossat, acceso desde Ronda Litoral salidas 20-21<br>     <b>Relevancia operativa:</b> Acceso estratégico para terminales de cruceros. El Port señala la puerta 2 como acceso recomendado y las salidas 20-21 de la Ronda Litoral como referencia operacional.     ');
+L.marker([41.3746, 2.1748]).addTo(map).bindPopup('     <b>Paral·lel / Port Vell / salida 21 Ronda Litoral</b><br>     <b>Categoría:</b> Conexión Ciutat Vella - puerto<br>     <b>Calles / entorno:</b> av. del Paral·lel, Port Vell, E. Marítima Balears<br>     <b>Relevancia operativa:</b> Punto sensible de mezcla entre tráfico urbano, acceso portuario, turismo y peatón. El Port identifica la salida 21 Ciutat Vella (Paral·lel, Port Vell, E. Marítima Balears) como acceso principal para varias terminales.     ');
+L.marker([41.2824, 2.0745]).addTo(map).bindPopup('     <b>Aeropuerto Josep Tarradellas BCN-El Prat T1</b><br>     <b>Categoría:</b> Gateway aeroportuario<br>     <b>Calles / entorno:</b> Terminal T1<br>     <b>Relevancia operativa:</b> Gran generador de demanda y uno de los gateways más importantes del sistema. Aena documenta los accesos por coche, taxi, bus y VTC a T1; es un caso natural para gestión multimodal y curbside.     ');
+L.marker([41.303, 2.0754]).addTo(map).bindPopup('     <b>Aeropuerto Josep Tarradellas BCN-El Prat T2</b><br>     <b>Categoría:</b> Gateway aeroportuario<br>     <b>Calles / entorno:</b> Terminal T2<br>     <b>Relevancia operativa:</b> Complementa T1 como gateway crítico. Aena documenta también las paradas de taxi frente a T2A, T2B y T2C y la conectividad por bus; es relevante para staging y reparto de llegadas/salidas.     ');
+
+  var bounds = L.latLngBounds([
+    [41.375, 2.1494],[41.4036, 2.1906],[41.3791, 2.1406],[41.387, 2.1699],[41.3598, 2.1391],[41.3338, 2.151],[41.3498, 2.1534],[41.3746, 2.1748],[41.2824, 2.0745],[41.303, 2.0754]
+  ]);
+  map.fitBounds(bounds.pad(0.12));
+</script>
+</body>
+</html>
