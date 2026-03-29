@@ -59,6 +59,7 @@ def init_state() -> None:
     ss.setdefault("batch_steps", 4)
     ss.setdefault("live_window", 36)
     ss.setdefault("mobility_twin_sel", "intersection")
+    ss.setdefault("live_focus", "Overview")
     ss.setdefault("rt", MobilityRuntime(scenario=ss["scenario"], seed=ss["seed"]))
 
 
@@ -378,6 +379,74 @@ def render_risk_panel(df_local: pd.DataFrame, latest_local: Dict[str, Any], rend
         )
 
 
+
+def render_overview_live_compact(df_local: pd.DataFrame, latest_local: Dict[str, Any], render_id: str = "live") -> None:
+    if df_local.empty:
+        st.info("No simulation data yet.")
+        return
+    live_df = df_local.tail(int(st.session_state["live_window"])).copy()
+    row = st.columns(5)
+    with row[0]:
+        kpi_block("Mode", MODE_LABELS.get(str(latest_local.get("mode", "")), str(latest_local.get("mode", ""))))
+    with row[1]:
+        kpi_block("Network speed", f"{latest_local.get('network_speed_index', 0.0):.2f}")
+    with row[2]:
+        kpi_block("Bus bunching", f"{latest_local.get('bus_bunching_index', 0.0):.2f}")
+    with row[3]:
+        kpi_block("Curb occupancy", f"{latest_local.get('curb_occupancy_rate', 0.0)*100:.1f}%")
+    with row[4]:
+        kpi_block("Risk score", f"{latest_local.get('risk_score', 0.0):.2f}")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(make_overview_performance(live_df, key=f"overview_compact_{render_id}"), use_container_width=True, key=f"plot_overview_compact_{render_id}")
+    with c2:
+        st.plotly_chart(make_line_chart(live_df, "step_id", ["bus_bunching_index", "curb_occupancy_rate", "risk_score"], "Live indicators", "index / ratio", f"overview_live_ind_{render_id}"), use_container_width=True, key=f"plot_overview_live_ind_{render_id}")
+    st.caption(str(latest_local.get("route_reason", "")))
+
+
+def render_twins_live_compact(df_local: pd.DataFrame, twin_sel: str, render_id: str = "live") -> None:
+    if df_local.empty:
+        st.info("No simulation data yet.")
+        return
+    live_df = df_local.tail(int(st.session_state["live_window"])).copy()
+    st.markdown(f"### Live twin view: {twin_sel.replace('_', ' ').title()}")
+    if twin_sel == "intersection":
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["corridor_delay_s"], "Delay", "s", f"int_delay_compact_{render_id}"), use_container_width=True, key=f"plot_int_delay_compact_{render_id}")
+        with c2:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["risk_score"], "Risk", "index", f"int_risk_compact_{render_id}"), use_container_width=True, key=f"plot_int_risk_compact_{render_id}")
+    elif twin_sel == "road_corridor":
+        st.plotly_chart(make_line_chart(live_df, "step_id", ["network_speed_index", "corridor_reliability_index", "gateway_delay_index"], "Road corridor", "index", f"road_compact_{render_id}"), use_container_width=True, key=f"plot_road_compact_{render_id}")
+    elif twin_sel == "bus_corridor":
+        st.plotly_chart(make_line_chart(live_df, "step_id", ["bus_bunching_index", "bus_commercial_speed_kmh"], "Bus corridor", "index / km/h", f"bus_compact_{render_id}"), use_container_width=True, key=f"plot_bus_compact_{render_id}")
+    elif twin_sel == "curb_zone":
+        st.plotly_chart(make_line_chart(live_df, "step_id", ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Curb zone", "ratio / queue", f"curb_compact_{render_id}"), use_container_width=True, key=f"plot_curb_compact_{render_id}")
+    elif twin_sel == "risk_hotspot":
+        st.plotly_chart(make_line_chart(live_df, "step_id", ["risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index"], "Risk hotspot", "index", f"risk_compact_{render_id}"), use_container_width=True, key=f"plot_risk_compact_{render_id}")
+
+
+def render_risk_live_compact(df_local: pd.DataFrame, latest_local: Dict[str, Any], render_id: str = "live") -> None:
+    if df_local.empty:
+        st.info("No simulation data yet.")
+        return
+    live_df = df_local.tail(int(st.session_state["live_window"])).copy()
+    row = st.columns(4)
+    with row[0]:
+        kpi_block("Risk", f"{latest_local.get('risk_score', 0.0):.2f}")
+    with row[1]:
+        kpi_block("Near-miss", f"{latest_local.get('near_miss_index', 0.0):.2f}")
+    with row[2]:
+        kpi_block("Ped exposure", f"{latest_local.get('pedestrian_exposure', 0.0):.2f}")
+    with row[3]:
+        kpi_block("Bike conflict", f"{latest_local.get('bike_conflict_index', 0.0):.2f}")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(make_line_chart(live_df, "step_id", ["risk_score", "near_miss_index"], "Risk & near-miss", "index", f"risk_compact_main_{render_id}"), use_container_width=True, key=f"plot_risk_compact_main_{render_id}")
+    with c2:
+        st.plotly_chart(make_line_chart(live_df, "step_id", ["pedestrian_exposure", "bike_conflict_index"], "Exposure", "index", f"risk_compact_exposure_{render_id}"), use_container_width=True, key=f"plot_risk_compact_exposure_{render_id}")
+    st.caption(str(latest_local.get("primary_hotspot_name", "")))
+
 def render_audit_panel(df_local: pd.DataFrame) -> None:
     if df_local.empty:
         st.info("No records yet.")
@@ -469,6 +538,7 @@ with st.sidebar:
     ss["live_window"] = st.slider("Visible live window (steps)", 12, 96, int(ss["live_window"]), step=6)
     ss["batch_steps"] = st.slider("Steps per visible run", 1, 24, int(ss["batch_steps"]), step=1)
     ss["sleep_s"] = st.slider("Delay between visible steps (s)", 0.05, 1.00, float(ss["sleep_s"]), step=0.05)
+    ss["live_focus"] = st.selectbox("Live focus", ["Overview", "Mobility Twins", "Risk & Prevention"], index=["Overview", "Mobility Twins", "Risk & Prevention"].index(ss["live_focus"]))
 
     st.divider()
     c1, c2 = st.columns(2)
@@ -528,8 +598,10 @@ with tab_audit:
     render_audit_panel(df)
 
 # Fill live/static content for the dynamic tabs
+focus = ss["live_focus"]
+snapshots = ss["rt"].twin_snapshot()
+
 if not ss["running"]:
-    snapshots = ss["rt"].twin_snapshot()
     with overview_placeholder.container():
         render_overview(df, latest, render_id="static")
     with twins_placeholder.container():
@@ -537,9 +609,22 @@ if not ss["running"]:
     with risk_placeholder.container():
         render_risk_panel(df, latest, render_id="static")
 else:
-    snapshots = ss["rt"].twin_snapshot()
-    frame_df = df.copy()
-    frame_latest = latest.copy()
+    # Freeze non-focused tabs to reduce flicker; only one live surface updates.
+    with overview_placeholder.container():
+        if focus == "Overview":
+            render_overview_live_compact(df, latest, render_id="focus_initial")
+        else:
+            render_overview(df, latest, render_id="frozen")
+    with twins_placeholder.container():
+        if focus == "Mobility Twins":
+            render_twins_live_compact(df, ss["mobility_twin_sel"], render_id="focus_initial")
+        else:
+            render_twins_panel(df, snapshots, ss["mobility_twin_sel"], render_id="frozen")
+    with risk_placeholder.container():
+        if focus == "Risk & Prevention":
+            render_risk_live_compact(df, latest, render_id="focus_initial")
+        else:
+            render_risk_panel(df, latest, render_id="frozen")
 
     for frame in range(int(ss["batch_steps"])):
         ss["rt"].step()
@@ -547,12 +632,15 @@ else:
         frame_latest = latest_record(frame_df)
         snapshots = ss["rt"].twin_snapshot()
 
-        with overview_placeholder.container():
-            render_overview(frame_df, frame_latest, render_id=f"overview_live_{frame}")
-        with twins_placeholder.container():
-            render_twins_panel(frame_df, snapshots, ss["mobility_twin_sel"], render_id=f"twins_live_{frame}")
-        with risk_placeholder.container():
-            render_risk_panel(frame_df, frame_latest, render_id=f"risk_live_{frame}")
+        if focus == "Overview":
+            with overview_placeholder.container():
+                render_overview_live_compact(frame_df, frame_latest, render_id=f"overview_live_{frame}")
+        elif focus == "Mobility Twins":
+            with twins_placeholder.container():
+                render_twins_live_compact(frame_df, ss["mobility_twin_sel"], render_id=f"twins_live_{frame}")
+        elif focus == "Risk & Prevention":
+            with risk_placeholder.container():
+                render_risk_live_compact(frame_df, frame_latest, render_id=f"risk_live_{frame}")
 
         time.sleep(float(ss["sleep_s"]))
 
