@@ -205,6 +205,146 @@ def extract_twin_hotspot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         "note": md.get("scenario_note"),
     }
 
+def fmt_pct(x: Any) -> str:
+    try:
+        return f"{float(x)*100:.1f}%"
+    except Exception:
+        return "—"
+
+
+def fmt_num(x: Any, suffix: str = "") -> str:
+    try:
+        return f"{float(x):.2f}{suffix}"
+    except Exception:
+        return "—"
+
+
+def safe_get(d: Dict[str, Any], key: str, default: Any = "—") -> Any:
+    return d.get(key, default) if isinstance(d, dict) else default
+
+
+def render_info_table(title: str, rows: list[tuple[str, str]]) -> None:
+    st.markdown(f"### {title}")
+    clean_rows = [{"Campo": k, "Valor": v} for k, v in rows if v not in [None, "", "—"]]
+    if clean_rows:
+        st.dataframe(pd.DataFrame(clean_rows), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Sin datos disponibles.")
+
+
+def format_route(route: str) -> str:
+    return {
+        "CLASSICAL": "Classical",
+        "QUANTUM": "Quantum",
+        "FALLBACK_CLASSICAL": "Fallback → Classical",
+    }.get(route, str(route))
+
+
+def render_twin_summary(twin_sel: str, snapshot: dict, latest_row: dict) -> None:
+    hotspot_name = safe_get(snapshot.get("metadata", {}), "hotspot_name", safe_get(snapshot, "hotspot_name", "No asignado"))
+    streets = safe_get(snapshot.get("metadata", {}), "streets", "No disponible")
+    category = safe_get(snapshot.get("metadata", {}), "category", "No disponible")
+    why = safe_get(snapshot.get("metadata", {}), "why", "No disponible")
+
+    route = format_route(str(latest_row.get("decision_route", ""))) if latest_row else "—"
+    route_reason = latest_row.get("route_reason", "—") if latest_row else "—"
+
+    title_map = {
+        "intersection": "Estado actual del cruce",
+        "road_corridor": "Estado actual del corredor",
+        "bus_corridor": "Estado actual del corredor bus",
+        "curb_zone": "Estado actual de la zona curbside",
+        "risk_hotspot": "Estado actual del hotspot de riesgo",
+    }
+
+    st.markdown(f"## {title_map.get(twin_sel, 'Estado actual del activo')}")
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        render_info_table(
+            "Identificación",
+            [
+                ("Activo", twin_sel.replace("_", " ").title()),
+                ("Hotspot", hotspot_name),
+                ("Categoría", category),
+                ("Calles / entorno", streets),
+            ],
+        )
+
+    with c2:
+        render_info_table(
+            "Decisión actual del sistema",
+            [
+                ("Ruta elegida", route),
+                ("Motivo", route_reason),
+                ("Evento activo", latest_row.get("active_event", "none") if latest_row else "—"),
+            ],
+        )
+
+    if twin_sel == "intersection":
+        render_info_table(
+            "Indicadores clave",
+            [
+                ("Cola NS", fmt_num(snapshot.get("queue_ns"), " veh")),
+                ("Cola EO", fmt_num(snapshot.get("queue_ew"), " veh")),
+                ("Retraso medio", fmt_num(snapshot.get("avg_delay_s"), " s")),
+                ("Espera peatonal", fmt_num(snapshot.get("ped_wait_s"), " s")),
+                ("Riesgo", fmt_num(snapshot.get("risk_score"))),
+                ("Throughput", fmt_num(snapshot.get("throughput_vph"), " veh/h")),
+            ],
+        )
+    elif twin_sel == "road_corridor":
+        render_info_table(
+            "Indicadores clave",
+            [
+                ("Velocidad media", fmt_num(snapshot.get("avg_speed_kmh"), " km/h")),
+                ("Travel time index", fmt_num(snapshot.get("travel_time_index"))),
+                ("Densidad", fmt_num(snapshot.get("density_proxy"))),
+                ("Riesgo de spillback", fmt_num(snapshot.get("queue_spillback_risk"))),
+                ("Emisiones proxy", fmt_num(snapshot.get("emission_proxy"))),
+                ("Ruido proxy", fmt_num(snapshot.get("noise_proxy"))),
+            ],
+        )
+    elif twin_sel == "bus_corridor":
+        render_info_table(
+            "Indicadores clave",
+            [
+                ("Headway real", fmt_num(snapshot.get("headway_real_s"), " s")),
+                ("Headway objetivo", fmt_num(snapshot.get("headway_target_s"), " s")),
+                ("Bunching index", fmt_num(snapshot.get("bunching_index"))),
+                ("Velocidad comercial", fmt_num(snapshot.get("commercial_speed_kmh"), " km/h")),
+                ("Ocupación", fmt_num(snapshot.get("occupancy_proxy"))),
+                ("Solicitudes de prioridad", str(snapshot.get("priority_requests_active", "—"))),
+            ],
+        )
+    elif twin_sel == "curb_zone":
+        render_info_table(
+            "Indicadores clave",
+            [
+                ("Ocupación", fmt_pct(snapshot.get("occupancy_rate"))),
+                ("Ocupación ilegal", fmt_pct(snapshot.get("illegal_occupancy_rate"))),
+                ("Tiempo medio de estancia", fmt_num(snapshot.get("avg_dwell_time_min"), " min")),
+                ("Cola de entregas", fmt_num(snapshot.get("delivery_queue"))),
+                ("Presión pick-up/drop-off", fmt_num(snapshot.get("pickup_dropoff_pressure"))),
+                ("Conflicto peatonal", fmt_num(snapshot.get("pedestrian_conflict_score"))),
+            ],
+        )
+    elif twin_sel == "risk_hotspot":
+        render_info_table(
+            "Indicadores clave",
+            [
+                ("Riesgo", fmt_num(snapshot.get("risk_score"))),
+                ("Near-miss index", fmt_num(snapshot.get("near_miss_index"))),
+                ("Exposición peatonal", fmt_num(snapshot.get("pedestrian_exposure"))),
+                ("Conflicto bici", fmt_num(snapshot.get("bike_conflict_index"))),
+                ("Visibilidad", fmt_num(snapshot.get("visibility_proxy"))),
+                ("Riesgo motocicleta", fmt_num(snapshot.get("motorcycle_risk_proxy"))),
+            ],
+        )
+
+    st.markdown("### Relevancia operativa")
+    st.write(why)
+
 
 def render_overview(df_local: pd.DataFrame, latest_local: Dict[str, Any], render_id: str = "base") -> None:
     if df_local.empty:
@@ -305,7 +445,7 @@ def render_twins_panel(df_local: pd.DataFrame, snapshots: Dict[str, Dict[str, An
     snapshot = snapshots.get(twin_sel, {})
     hotspot = extract_twin_hotspot(snapshot)
 
-    c_top1, c_top2 = st.columns([1.2, 1.0])
+    c_top1, c_top2 = st.columns([1.0, 1.2])
     with c_top1:
         render_hotspot_card(
             hotspot.get("name"),
@@ -317,8 +457,8 @@ def render_twins_panel(df_local: pd.DataFrame, snapshots: Dict[str, Dict[str, An
             note=hotspot.get("note"),
         )
     with c_top2:
-        st.markdown("### Current twin snapshot")
-        st.json(snapshot)
+        latest_row = df_local.iloc[-1].to_dict() if not df_local.empty else {}
+        render_twin_summary(twin_sel, snapshot, latest_row)
 
     live_df = df_local.tail(int(st.session_state["live_window"])).copy()
 
