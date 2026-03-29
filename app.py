@@ -23,8 +23,7 @@ st.markdown(
     .metric-card {padding:0.8rem 1rem; border-radius:16px; background:rgba(255,255,255,0.03);
                   border:1px solid rgba(255,255,255,0.06);}
     .hotspot-box {padding:0.8rem 1rem; border-radius:16px; background:rgba(255,255,255,0.03);
-                  border:1px solid rgba(255,255,255,0.06); margin-bottom: 0.8rem;}
-    .small-note {color:#AEB8C7; font-size:0.92rem;}
+                  border:1px solid rgba(255,255,255,0.06); margin-bottom:0.8rem;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -59,6 +58,7 @@ def init_state() -> None:
     ss.setdefault("sleep_s", 0.30)
     ss.setdefault("batch_steps", 4)
     ss.setdefault("live_window", 36)
+    ss.setdefault("mobility_twin_sel", "intersection")
     ss.setdefault("rt", MobilityRuntime(scenario=ss["scenario"], seed=ss["seed"]))
 
 
@@ -189,7 +189,7 @@ def render_hotspot_card(name: Any, streets: Any = None, category: Any = None, wh
     if note:
         st.caption(str(note))
     st.markdown("</div>", unsafe_allow_html=True)
-    hotspot_map(lat, lon, label=str(name or 'Hotspot'))
+    hotspot_map(lat, lon, label=str(name or "Hotspot"))
 
 
 def extract_twin_hotspot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
@@ -205,63 +205,16 @@ def extract_twin_hotspot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-init_state()
-ss = st.session_state
-
-with st.sidebar:
-    st.markdown("## Control Panel")
-    selected_scenario = st.selectbox(
-        "Scenario",
-        options=list(SCENARIO_LABELS.keys()),
-        format_func=lambda x: SCENARIO_LABELS[x],
-        index=list(SCENARIO_LABELS.keys()).index(ss["scenario"]),
-    )
-    if selected_scenario != ss["scenario"]:
-        ss["scenario"] = selected_scenario
-        rebuild_runtime()
-        st.rerun()
-    seed = st.number_input("Simulation seed", min_value=1, max_value=999999, value=int(ss["seed"]), step=1)
-    if int(seed) != int(ss["seed"]):
-        ss["seed"] = int(seed)
-        rebuild_runtime()
-        st.rerun()
-    st.divider()
-    ss["live_window"] = st.slider("Visible live window (steps)", 12, 96, int(ss["live_window"]), step=6)
-    ss["batch_steps"] = st.slider("Steps per visible run", 1, 24, int(ss["batch_steps"]), step=1)
-    ss["sleep_s"] = st.slider("Delay between visible steps (s)", 0.05, 1.00, float(ss["sleep_s"]), step=0.05)
-    st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("▶ Start", use_container_width=True):
-            ss["running"] = True
-    with c2:
-        if st.button("⏸ Pause", use_container_width=True):
-            ss["running"] = False
-    c3, c4 = st.columns(2)
-    with c3:
-        if st.button("⏭ Step", use_container_width=True):
-            ss["rt"].step()
-            ss["running"] = False
-            st.rerun()
-    with c4:
-        if st.button("⏹ Reset", use_container_width=True):
-            rebuild_runtime()
-            st.rerun()
-
-df = get_df()
-latest = latest_record(df)
-
-
 def render_overview(df_local: pd.DataFrame, latest_local: Dict[str, Any], render_id: str = "base") -> None:
     if df_local.empty:
         st.info("No simulation data yet. Press Step or Start.")
         return
 
-    live_df = df_local.tail(int(ss["live_window"])).copy()
+    live_df = df_local.tail(int(st.session_state["live_window"])).copy()
     q_share = (df_local["decision_route"] == "QUANTUM").mean() * 100.0 if len(df_local) else 0.0
     fb_rate = df_local["fallback_triggered"].mean() * 100.0 if len(df_local) else 0.0
-    avg_latency = float(df_local["exec_ms"].tail(24).mean())
-    mean_conf = float(df_local["decision_confidence"].tail(24).mean() * 100.0)
+    avg_latency = float(df_local["exec_ms"].tail(24).mean()) if len(df_local) else 0.0
+    mean_conf = float(df_local["decision_confidence"].tail(24).mean() * 100.0) if len(df_local) else 0.0
 
     row1 = st.columns(6)
     with row1[0]:
@@ -342,6 +295,201 @@ def render_overview(df_local: pd.DataFrame, latest_local: Dict[str, Any], render
     snap_cols = [c for c in snap_cols if c in live_df.columns]
     st.dataframe(live_df[snap_cols].tail(12), use_container_width=True, height=320)
 
+
+def render_twins_panel(df_local: pd.DataFrame, snapshots: Dict[str, Dict[str, Any]], twin_sel: str, render_id: str = "base") -> None:
+    if df_local.empty:
+        st.info("No simulation data yet.")
+        return
+
+    snapshot = snapshots.get(twin_sel, {})
+    hotspot = extract_twin_hotspot(snapshot)
+
+    c_top1, c_top2 = st.columns([1.2, 1.0])
+    with c_top1:
+        render_hotspot_card(
+            hotspot.get("name"),
+            streets=hotspot.get("streets"),
+            category=hotspot.get("category"),
+            why=hotspot.get("why"),
+            lat=hotspot.get("lat"),
+            lon=hotspot.get("lon"),
+            note=hotspot.get("note"),
+        )
+    with c_top2:
+        st.markdown("### Current twin snapshot")
+        st.json(snapshot)
+
+    live_df = df_local.tail(int(st.session_state["live_window"])).copy()
+
+    if twin_sel == "intersection":
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["corridor_delay_s"], "Intersection / corridor delay", "s", f"int_delay_{render_id}"), use_container_width=True, key=f"plot_int_delay_{render_id}")
+        with c2:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["risk_score"], "Intersection risk", "index", f"int_risk_{render_id}"), use_container_width=True, key=f"plot_int_risk_{render_id}")
+    elif twin_sel == "road_corridor":
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["network_speed_index", "corridor_reliability_index"], "Corridor performance", "index", f"corr_perf_{render_id}"), use_container_width=True, key=f"plot_corr_perf_{render_id}")
+        with c2:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["gateway_delay_index"], "Gateway propagation", "index", f"corr_gate_{render_id}"), use_container_width=True, key=f"plot_corr_gate_{render_id}")
+    elif twin_sel == "bus_corridor":
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["bus_bunching_index"], "Bus bunching", "index", f"bus_bunch_{render_id}"), use_container_width=True, key=f"plot_bus_bunch_{render_id}")
+        with c2:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["bus_commercial_speed_kmh", "bus_priority_requests"], "Bus speed and priority requests", "km/h / count", f"bus_speed_{render_id}"), use_container_width=True, key=f"plot_bus_speed_{render_id}")
+    elif twin_sel == "curb_zone":
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["curb_occupancy_rate", "illegal_curb_occupancy_rate"], "Curb occupancy", "ratio", f"curb_occ_{render_id}"), use_container_width=True, key=f"plot_curb_occ_{render_id}")
+        with c2:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["delivery_queue"], "Delivery queue", "count", f"curb_queue_{render_id}"), use_container_width=True, key=f"plot_curb_queue_{render_id}")
+    elif twin_sel == "risk_hotspot":
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["risk_score", "near_miss_index"], "Risk and near-miss", "index", f"risk_main_{render_id}"), use_container_width=True, key=f"plot_risk_main_{render_id}")
+        with c2:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["pedestrian_exposure", "bike_conflict_index"], "VRU exposure", "index", f"risk_vru_{render_id}"), use_container_width=True, key=f"plot_risk_vru_{render_id}")
+
+
+def render_risk_panel(df_local: pd.DataFrame, latest_local: Dict[str, Any], render_id: str = "base") -> None:
+    if df_local.empty:
+        st.info("No simulation data yet.")
+        return
+
+    live_df = df_local.tail(int(st.session_state["live_window"])).copy()
+    c1, c2 = st.columns([1.6, 1.0])
+    with c1:
+        c11, c12 = st.columns(2)
+        with c11:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["risk_score", "near_miss_index"], "Risk and early-warning state", "index", f"risk_tab_main_{render_id}"), use_container_width=True, key=f"plot_risk_tab_main_{render_id}")
+        with c12:
+            st.plotly_chart(make_line_chart(live_df, "step_id", ["pedestrian_exposure", "bike_conflict_index"], "Exposure of vulnerable users", "index", f"risk_tab_vru_{render_id}"), use_container_width=True, key=f"plot_risk_tab_vru_{render_id}")
+        risk_view = live_df[[c for c in ["step_id", "active_event", "primary_hotspot_name", "risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index", "route_reason"] if c in live_df.columns]].tail(20)
+        st.dataframe(risk_view, use_container_width=True, height=320)
+    with c2:
+        st.markdown("### Current risk hotspot")
+        render_hotspot_card(
+            latest_local.get("risk_hotspot_name") or latest_local.get("primary_hotspot_name"),
+            note=latest_local.get("scenario_note"),
+            lat=latest_local.get("primary_hotspot_lat"),
+            lon=latest_local.get("primary_hotspot_lon"),
+        )
+
+
+def render_audit_panel(df_local: pd.DataFrame) -> None:
+    if df_local.empty:
+        st.info("No records yet.")
+        return
+
+    cols_to_show = [
+        "step_id", "ts", "mode", "scenario", "active_event", "primary_hotspot_name", "decision_route",
+        "route_reason", "exec_ms", "decision_confidence", "fallback_triggered",
+        "network_speed_index", "bus_bunching_index", "curb_occupancy_rate", "risk_score"
+    ]
+    cols_to_show = [c for c in cols_to_show if c in df_local.columns]
+    st.dataframe(df_local[cols_to_show].tail(50), use_container_width=True, height=320)
+    idx = st.number_input("Record index (0-based)", min_value=0, max_value=max(0, len(df_local) - 1), value=max(0, len(df_local) - 1), step=1, key="audit_idx")
+    row = df_local.iloc[int(idx)]
+    c1, c2 = st.columns([1.2, 1.0])
+    with c1:
+        st.markdown("### Decision summary")
+        st.json({
+            "step_id": int(row["step_id"]),
+            "mode": row["mode"],
+            "scenario": row["scenario"],
+            "active_event": row["active_event"],
+            "primary_hotspot_name": row.get("primary_hotspot_name"),
+            "decision_route": row["decision_route"],
+            "route_reason": row["route_reason"],
+            "exec_ms": int(row["exec_ms"]),
+            "confidence": float(row["decision_confidence"]),
+            "fallback_triggered": bool(row["fallback_triggered"]),
+            "fallback_reasons": row["fallback_reasons"],
+        })
+        st.markdown("### Urban state snapshot")
+        st.json({
+            "network_speed_index": float(row["network_speed_index"]),
+            "corridor_reliability_index": float(row["corridor_reliability_index"]),
+            "bus_bunching_index": float(row["bus_bunching_index"]),
+            "curb_occupancy_rate": float(row["curb_occupancy_rate"]),
+            "risk_score": float(row["risk_score"]),
+            "gateway_delay_index": float(row["gateway_delay_index"]),
+            "complexity_score": float(row["complexity_score"]),
+            "discrete_ratio": float(row["discrete_ratio"]),
+        })
+    with c2:
+        render_hotspot_card(
+            row.get("primary_hotspot_name"),
+            note=row.get("scenario_note"),
+            lat=row.get("primary_hotspot_lat"),
+            lon=row.get("primary_hotspot_lon"),
+        )
+    b1, b2 = st.columns(2)
+    with b1:
+        st.markdown("### Dispatch")
+        st.json(safe_json_loads(row.get("dispatch_json")))
+        st.markdown("### Objective breakdown")
+        st.json(safe_json_loads(row.get("objective_breakdown_json")))
+    with b2:
+        st.markdown("### Quantum Request Envelope")
+        qre = safe_json_loads(row.get("qre_json"))
+        st.json(qre if qre else {"info": "No QRE generated on this step."})
+        st.markdown("### Quantum Result")
+        result = safe_json_loads(row.get("result_json"))
+        st.json(result if result else {"info": "No quantum result on this step."})
+    csv_bytes = df_local.to_csv(index=False).encode("utf-8")
+    st.download_button("Download CSV", data=csv_bytes, file_name="mobility_control_room_run.csv", mime="text/csv", key="dl_mobility_csv")
+
+
+init_state()
+ss = st.session_state
+
+with st.sidebar:
+    st.markdown("## Control Panel")
+    selected_scenario = st.selectbox(
+        "Scenario",
+        options=list(SCENARIO_LABELS.keys()),
+        format_func=lambda x: SCENARIO_LABELS[x],
+        index=list(SCENARIO_LABELS.keys()).index(ss["scenario"]),
+    )
+    if selected_scenario != ss["scenario"]:
+        ss["scenario"] = selected_scenario
+        rebuild_runtime()
+        st.rerun()
+
+    seed = st.number_input("Simulation seed", min_value=1, max_value=999999, value=int(ss["seed"]), step=1)
+    if int(seed) != int(ss["seed"]):
+        ss["seed"] = int(seed)
+        rebuild_runtime()
+        st.rerun()
+
+    st.divider()
+    ss["live_window"] = st.slider("Visible live window (steps)", 12, 96, int(ss["live_window"]), step=6)
+    ss["batch_steps"] = st.slider("Steps per visible run", 1, 24, int(ss["batch_steps"]), step=1)
+    ss["sleep_s"] = st.slider("Delay between visible steps (s)", 0.05, 1.00, float(ss["sleep_s"]), step=0.05)
+
+    st.divider()
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("▶ Start", use_container_width=True):
+            ss["running"] = True
+    with c2:
+        if st.button("⏸ Pause", use_container_width=True):
+            ss["running"] = False
+
+    c3, c4 = st.columns(2)
+    with c3:
+        if st.button("⏭ Step", use_container_width=True):
+            ss["rt"].step()
+            ss["running"] = False
+            st.rerun()
+    with c4:
+        if st.button("⏹ Reset", use_container_width=True):
+            rebuild_runtime()
+            st.rerun()
+
 st.markdown(
     """
     <div class="hero">
@@ -352,164 +500,60 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+df = get_df()
+latest = latest_record(df)
 if latest.get("scenario_note"):
     st.caption(str(latest.get("scenario_note")))
 
-tab_overview, tab_twins, tab_risk, tab_audit = st.tabs(["Overview", "Mobility Twins", "Risk & Prevention", "Audit & Orchestration"])
+tab_overview, tab_twins, tab_risk, tab_audit = st.tabs(
+    ["Overview", "Mobility Twins", "Risk & Prevention", "Audit & Orchestration"]
+)
 
 with tab_overview:
     overview_placeholder = st.empty()
-    if not ss["running"]:
-        with overview_placeholder.container():
-            render_overview(df, latest, render_id="static")
-    else:
-        frame_df = df.copy()
-        frame_latest = latest.copy()
-        for frame in range(int(ss["batch_steps"])):
-            ss["rt"].step()
-            frame_df = get_df()
-            frame_latest = latest_record(frame_df)
-            with overview_placeholder.container():
-                render_overview(frame_df, frame_latest, render_id=f"live_{frame}")
-            time.sleep(float(ss["sleep_s"]))
-        st.rerun()
 
 with tab_twins:
-    snapshots = ss["rt"].twin_snapshot()
-    twin_sel = st.selectbox("Select twin", ["intersection", "road_corridor", "bus_corridor", "curb_zone", "risk_hotspot"], index=0)
-    if df.empty:
-        st.info("No simulation data yet.")
-    else:
-        snapshot = snapshots.get(twin_sel, {})
-        hotspot = extract_twin_hotspot(snapshot)
-
-        c_top1, c_top2 = st.columns([1.2, 1.0])
-        with c_top1:
-            render_hotspot_card(
-                hotspot.get("name"),
-                streets=hotspot.get("streets"),
-                category=hotspot.get("category"),
-                why=hotspot.get("why"),
-                lat=hotspot.get("lat"),
-                lon=hotspot.get("lon"),
-                note=hotspot.get("note"),
-            )
-        with c_top2:
-            st.markdown("### Current twin snapshot")
-            st.json(snapshot)
-
-        if twin_sel == "intersection":
-            c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(make_line_chart(df, "step_id", ["corridor_delay_s"], "Intersection / corridor delay", "s", "int_delay"), use_container_width=True, key="plot_int_delay")
-            with c2:
-                st.plotly_chart(make_line_chart(df, "step_id", ["risk_score"], "Intersection risk", "index", "int_risk"), use_container_width=True, key="plot_int_risk")
-        elif twin_sel == "road_corridor":
-            c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(make_line_chart(df, "step_id", ["network_speed_index", "corridor_reliability_index"], "Corridor performance", "index", "corr_perf"), use_container_width=True, key="plot_corr_perf")
-            with c2:
-                st.plotly_chart(make_line_chart(df, "step_id", ["gateway_delay_index"], "Gateway propagation", "index", "corr_gate"), use_container_width=True, key="plot_corr_gate")
-        elif twin_sel == "bus_corridor":
-            c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(make_line_chart(df, "step_id", ["bus_bunching_index"], "Bus bunching", "index", "bus_bunch"), use_container_width=True, key="plot_bus_bunch")
-            with c2:
-                st.plotly_chart(make_line_chart(df, "step_id", ["bus_commercial_speed_kmh", "bus_priority_requests"], "Bus speed and priority requests", "km/h / count", "bus_speed"), use_container_width=True, key="plot_bus_speed")
-        elif twin_sel == "curb_zone":
-            c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(make_line_chart(df, "step_id", ["curb_occupancy_rate", "illegal_curb_occupancy_rate"], "Curb occupancy", "ratio", "curb_occ"), use_container_width=True, key="plot_curb_occ")
-            with c2:
-                st.plotly_chart(make_line_chart(df, "step_id", ["delivery_queue"], "Delivery queue", "count", "curb_queue"), use_container_width=True, key="plot_curb_queue")
-        elif twin_sel == "risk_hotspot":
-            c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(make_line_chart(df, "step_id", ["risk_score", "near_miss_index"], "Risk and near-miss", "index", "risk_main"), use_container_width=True, key="plot_risk_main")
-            with c2:
-                st.plotly_chart(make_line_chart(df, "step_id", ["pedestrian_exposure", "bike_conflict_index"], "VRU exposure", "index", "risk_vru"), use_container_width=True, key="plot_risk_vru")
+    st.selectbox(
+        "Select twin",
+        ["intersection", "road_corridor", "bus_corridor", "curb_zone", "risk_hotspot"],
+        index=["intersection", "road_corridor", "bus_corridor", "curb_zone", "risk_hotspot"].index(ss["mobility_twin_sel"]),
+        key="mobility_twin_sel",
+    )
+    twins_placeholder = st.empty()
 
 with tab_risk:
-    if df.empty:
-        st.info("No simulation data yet.")
-    else:
-        c1, c2 = st.columns([1.6, 1.0])
-        with c1:
-            c11, c12 = st.columns(2)
-            with c11:
-                st.plotly_chart(make_line_chart(df, "step_id", ["risk_score", "near_miss_index"], "Risk and early-warning state", "index", "risk_tab_main"), use_container_width=True, key="plot_risk_tab_main")
-            with c12:
-                st.plotly_chart(make_line_chart(df, "step_id", ["pedestrian_exposure", "bike_conflict_index"], "Exposure of vulnerable users", "index", "risk_tab_vru"), use_container_width=True, key="plot_risk_tab_vru")
-            risk_view = df[[c for c in ["step_id", "active_event", "primary_hotspot_name", "risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index", "route_reason"] if c in df.columns]].tail(20)
-            st.dataframe(risk_view, use_container_width=True, height=320)
-        with c2:
-            st.markdown("### Current risk hotspot")
-            render_hotspot_card(
-                latest.get("risk_hotspot_name") or latest.get("primary_hotspot_name"),
-                note=latest.get("scenario_note"),
-                lat=latest.get("primary_hotspot_lat"),
-                lon=latest.get("primary_hotspot_lon"),
-            )
+    risk_placeholder = st.empty()
 
 with tab_audit:
-    if df.empty:
-        st.info("No records yet.")
-    else:
-        cols_to_show = [
-            "step_id", "ts", "mode", "scenario", "active_event", "primary_hotspot_name", "decision_route",
-            "route_reason", "exec_ms", "decision_confidence", "fallback_triggered",
-            "network_speed_index", "bus_bunching_index", "curb_occupancy_rate", "risk_score"
-        ]
-        cols_to_show = [c for c in cols_to_show if c in df.columns]
-        st.dataframe(df[cols_to_show].tail(50), use_container_width=True, height=320)
-        idx = st.number_input("Record index (0-based)", min_value=0, max_value=max(0, len(df) - 1), value=max(0, len(df) - 1), step=1)
-        row = df.iloc[int(idx)]
-        c1, c2 = st.columns([1.2, 1.0])
-        with c1:
-            st.markdown("### Decision summary")
-            st.json({
-                "step_id": int(row["step_id"]),
-                "mode": row["mode"],
-                "scenario": row["scenario"],
-                "active_event": row["active_event"],
-                "primary_hotspot_name": row.get("primary_hotspot_name"),
-                "decision_route": row["decision_route"],
-                "route_reason": row["route_reason"],
-                "exec_ms": int(row["exec_ms"]),
-                "confidence": float(row["decision_confidence"]),
-                "fallback_triggered": bool(row["fallback_triggered"]),
-                "fallback_reasons": row["fallback_reasons"],
-            })
-            st.markdown("### Urban state snapshot")
-            st.json({
-                "network_speed_index": float(row["network_speed_index"]),
-                "corridor_reliability_index": float(row["corridor_reliability_index"]),
-                "bus_bunching_index": float(row["bus_bunching_index"]),
-                "curb_occupancy_rate": float(row["curb_occupancy_rate"]),
-                "risk_score": float(row["risk_score"]),
-                "gateway_delay_index": float(row["gateway_delay_index"]),
-                "complexity_score": float(row["complexity_score"]),
-                "discrete_ratio": float(row["discrete_ratio"]),
-            })
-        with c2:
-            render_hotspot_card(
-                row.get("primary_hotspot_name"),
-                note=row.get("scenario_note"),
-                lat=row.get("primary_hotspot_lat"),
-                lon=row.get("primary_hotspot_lon"),
-            )
-        b1, b2 = st.columns(2)
-        with b1:
-            st.markdown("### Dispatch")
-            st.json(safe_json_loads(row.get("dispatch_json")))
-            st.markdown("### Objective breakdown")
-            st.json(safe_json_loads(row.get("objective_breakdown_json")))
-        with b2:
-            st.markdown("### Quantum Request Envelope")
-            qre = safe_json_loads(row.get("qre_json"))
-            st.json(qre if qre else {"info": "No QRE generated on this step."})
-            st.markdown("### Quantum Result")
-            result = safe_json_loads(row.get("result_json"))
-            st.json(result if result else {"info": "No quantum result on this step."})
-        csv_bytes = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download CSV", data=csv_bytes, file_name="mobility_control_room_run.csv", mime="text/csv", key="dl_mobility_csv")
+    render_audit_panel(df)
+
+# Fill live/static content for the dynamic tabs
+if not ss["running"]:
+    snapshots = ss["rt"].twin_snapshot()
+    with overview_placeholder.container():
+        render_overview(df, latest, render_id="static")
+    with twins_placeholder.container():
+        render_twins_panel(df, snapshots, ss["mobility_twin_sel"], render_id="static")
+    with risk_placeholder.container():
+        render_risk_panel(df, latest, render_id="static")
+else:
+    snapshots = ss["rt"].twin_snapshot()
+    frame_df = df.copy()
+    frame_latest = latest.copy()
+
+    for frame in range(int(ss["batch_steps"])):
+        ss["rt"].step()
+        frame_df = get_df()
+        frame_latest = latest_record(frame_df)
+        snapshots = ss["rt"].twin_snapshot()
+
+        with overview_placeholder.container():
+            render_overview(frame_df, frame_latest, render_id=f"overview_live_{frame}")
+        with twins_placeholder.container():
+            render_twins_panel(frame_df, snapshots, ss["mobility_twin_sel"], render_id=f"twins_live_{frame}")
+        with risk_placeholder.container():
+            render_risk_panel(frame_df, frame_latest, render_id=f"risk_live_{frame}")
+
+        time.sleep(float(ss["sleep_s"]))
+
+    st.rerun()
