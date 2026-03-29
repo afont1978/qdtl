@@ -182,8 +182,8 @@ with st.sidebar:
         st.rerun()
     st.divider()
     ss["live_window"] = st.slider("Visible live window (steps)", 12, 96, int(ss["live_window"]), step=6)
-    ss["batch_steps"] = st.slider("Steps per batch", 1, 24, int(ss["batch_steps"]), step=1)
-    ss["sleep_s"] = st.slider("Delay between batches (s)", 0.05, 1.00, float(ss["sleep_s"]), step=0.05)
+    ss["batch_steps"] = st.slider("Steps per visible run", 1, 24, int(ss["batch_steps"]), step=1)
+    ss["sleep_s"] = st.slider("Delay between visible steps (s)", 0.05, 1.00, float(ss["sleep_s"]), step=0.05)
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
@@ -203,14 +203,84 @@ with st.sidebar:
             rebuild_runtime()
             st.rerun()
 
-if ss["running"]:
-    for _ in range(int(ss["batch_steps"])):
-        ss["rt"].step()
-    time.sleep(float(ss["sleep_s"]))
-    st.rerun()
-
 df = get_df()
 latest = latest_record(df)
+
+
+def render_overview(df_local: pd.DataFrame, latest_local: Dict[str, Any], render_id: str = "base") -> None:
+    if df_local.empty:
+        st.info("No simulation data yet. Press Step or Start.")
+        return
+
+    live_df = df_local.tail(int(ss["live_window"])).copy()
+    q_share = (df_local["decision_route"] == "QUANTUM").mean() * 100.0 if len(df_local) else 0.0
+    fb_rate = df_local["fallback_triggered"].mean() * 100.0 if len(df_local) else 0.0
+    avg_latency = float(df_local["exec_ms"].tail(24).mean())
+    mean_conf = float(df_local["decision_confidence"].tail(24).mean() * 100.0)
+
+    row1 = st.columns(6)
+    with row1[0]:
+        kpi_block("Mode", MODE_LABELS.get(str(latest_local.get("mode", "")), str(latest_local.get("mode", ""))))
+    with row1[1]:
+        kpi_block("Network speed", f"{latest_local.get('network_speed_index', 0.0):.2f}")
+    with row1[2]:
+        kpi_block("Corridor reliability", f"{latest_local.get('corridor_reliability_index', 0.0):.2f}")
+    with row1[3]:
+        kpi_block("Bus bunching", f"{latest_local.get('bus_bunching_index', 0.0):.2f}")
+    with row1[4]:
+        kpi_block("Curb occupancy", f"{latest_local.get('curb_occupancy_rate', 0.0)*100:.1f}%")
+    with row1[5]:
+        kpi_block("Risk score", f"{latest_local.get('risk_score', 0.0):.2f}")
+
+    row2 = st.columns(6)
+    with row2[0]:
+        kpi_block("Near-miss index", f"{latest_local.get('near_miss_index', 0.0):.2f}")
+    with row2[1]:
+        kpi_block("Gateway delay", f"{latest_local.get('gateway_delay_index', 0.0):.2f}")
+    with row2[2]:
+        kpi_block("Operational score", f"{latest_local.get('step_operational_score', 0.0):.2f}")
+    with row2[3]:
+        kpi_block("Quantum share", f"{q_share:.1f}%")
+    with row2[4]:
+        kpi_block("Fallback rate", f"{fb_rate:.1f}%")
+    with row2[5]:
+        kpi_block("Avg latency", f"{avg_latency:.0f} ms", f"Conf {mean_conf:.1f}%")
+
+    left, right = st.columns([2.2, 1.0])
+    with left:
+        st.plotly_chart(make_overview_performance(live_df, key=f"mob_perf_{render_id}"), use_container_width=True, key=f"plot_mob_perf_{render_id}")
+        c_a, c_b = st.columns(2)
+        with c_a:
+            st.plotly_chart(
+                make_line_chart(live_df, "step_id", ["bus_bunching_index", "bus_commercial_speed_kmh"], "Transit performance", y_title="index / km/h", key=f"transit_perf_{render_id}"),
+                use_container_width=True,
+                key=f"plot_transit_perf_{render_id}",
+            )
+        with c_b:
+            st.plotly_chart(
+                make_line_chart(live_df, "step_id", ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Logistics and curb", y_title="ratio / queue", key=f"curb_perf_{render_id}"),
+                use_container_width=True,
+                key=f"plot_curb_perf_{render_id}",
+            )
+    with right:
+        st.plotly_chart(make_route_chart(df_local, key=f"route_mix_{render_id}"), use_container_width=True, key=f"plot_route_mix_{render_id}")
+        st.plotly_chart(make_event_chart(df_local, key=f"event_mix_{render_id}"), use_container_width=True, key=f"plot_event_mix_{render_id}")
+        st.markdown("### Current decision")
+        st.write(f"**Route:** {latest_local.get('decision_route', '')}")
+        st.write(f"**Confidence:** {latest_local.get('decision_confidence', 0.0)*100:.1f}%")
+        st.write(f"**Latency:** {latest_local.get('exec_ms', 0)} ms")
+        st.write(f"**Fallback:** {'Yes' if latest_local.get('fallback_triggered', False) else 'No'}")
+        st.write(f"**Active event:** {latest_local.get('active_event', 'none') or 'none'}")
+        st.markdown("### Why this route")
+        st.caption(str(latest_local.get("route_reason", "No route reason available.")))
+
+    snap_cols = [
+        "step_id", "mode", "scenario", "active_event", "network_speed_index",
+        "corridor_reliability_index", "bus_bunching_index", "curb_occupancy_rate",
+        "risk_score", "gateway_delay_index", "decision_route"
+    ]
+    snap_cols = [c for c in snap_cols if c in live_df.columns]
+    st.dataframe(live_df[snap_cols].tail(12), use_container_width=True, height=320)
 
 st.markdown(
     """
@@ -225,74 +295,21 @@ st.markdown(
 tab_overview, tab_twins, tab_risk, tab_audit = st.tabs(["Overview", "Mobility Twins", "Risk & Prevention", "Audit & Orchestration"])
 
 with tab_overview:
-    if df.empty:
-        st.info("No simulation data yet. Press Step or Start.")
+    overview_placeholder = st.empty()
+    if not ss["running"]:
+        with overview_placeholder.container():
+            render_overview(df, latest, render_id="static")
     else:
-        live_df = df.tail(int(ss["live_window"])).copy()
-        q_share = (df["decision_route"] == "QUANTUM").mean() * 100.0 if len(df) else 0.0
-        fb_rate = df["fallback_triggered"].mean() * 100.0 if len(df) else 0.0
-        avg_latency = float(df["exec_ms"].tail(24).mean())
-        mean_conf = float(df["decision_confidence"].tail(24).mean() * 100.0)
-        row1 = st.columns(6)
-        with row1[0]:
-            kpi_block("Mode", MODE_LABELS.get(str(latest.get("mode", "")), str(latest.get("mode", ""))))
-        with row1[1]:
-            kpi_block("Network speed", f"{latest.get('network_speed_index', 0.0):.2f}")
-        with row1[2]:
-            kpi_block("Corridor reliability", f"{latest.get('corridor_reliability_index', 0.0):.2f}")
-        with row1[3]:
-            kpi_block("Bus bunching", f"{latest.get('bus_bunching_index', 0.0):.2f}")
-        with row1[4]:
-            kpi_block("Curb occupancy", f"{latest.get('curb_occupancy_rate', 0.0)*100:.1f}%")
-        with row1[5]:
-            kpi_block("Risk score", f"{latest.get('risk_score', 0.0):.2f}")
-        row2 = st.columns(6)
-        with row2[0]:
-            kpi_block("Near-miss index", f"{latest.get('near_miss_index', 0.0):.2f}")
-        with row2[1]:
-            kpi_block("Gateway delay", f"{latest.get('gateway_delay_index', 0.0):.2f}")
-        with row2[2]:
-            kpi_block("Operational score", f"{latest.get('step_operational_score', 0.0):.2f}")
-        with row2[3]:
-            kpi_block("Quantum share", f"{q_share:.1f}%")
-        with row2[4]:
-            kpi_block("Fallback rate", f"{fb_rate:.1f}%")
-        with row2[5]:
-            kpi_block("Avg latency", f"{avg_latency:.0f} ms", f"Conf {mean_conf:.1f}%")
-        left, right = st.columns([2.2, 1.0])
-        with left:
-            st.plotly_chart(make_overview_performance(live_df, key="mob_perf"), use_container_width=True, key="plot_mob_perf")
-            c_a, c_b = st.columns(2)
-            with c_a:
-                st.plotly_chart(
-                    make_line_chart(live_df, "step_id", ["bus_bunching_index", "bus_commercial_speed_kmh"], "Transit performance", y_title="index / km/h", key="transit_perf"),
-                    use_container_width=True,
-                    key="plot_transit_perf",
-                )
-            with c_b:
-                st.plotly_chart(
-                    make_line_chart(live_df, "step_id", ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Logistics and curb", y_title="ratio / queue", key="curb_perf"),
-                    use_container_width=True,
-                    key="plot_curb_perf",
-                )
-        with right:
-            st.plotly_chart(make_route_chart(df, key="route_mix"), use_container_width=True, key="plot_route_mix")
-            st.plotly_chart(make_event_chart(df, key="event_mix"), use_container_width=True, key="plot_event_mix")
-            st.markdown("### Current decision")
-            st.write(f"**Route:** {latest.get('decision_route', '')}")
-            st.write(f"**Confidence:** {latest.get('decision_confidence', 0.0)*100:.1f}%")
-            st.write(f"**Latency:** {latest.get('exec_ms', 0)} ms")
-            st.write(f"**Fallback:** {'Yes' if latest.get('fallback_triggered', False) else 'No'}")
-            st.write(f"**Active event:** {latest.get('active_event', 'none') or 'none'}")
-            st.markdown("### Why this route")
-            st.caption(str(latest.get("route_reason", "No route reason available.")))
-        snap_cols = [
-            "step_id", "mode", "scenario", "active_event", "network_speed_index",
-            "corridor_reliability_index", "bus_bunching_index", "curb_occupancy_rate",
-            "risk_score", "gateway_delay_index", "decision_route"
-        ]
-        snap_cols = [c for c in snap_cols if c in live_df.columns]
-        st.dataframe(live_df[snap_cols].tail(12), use_container_width=True, height=320)
+        frame_df = df.copy()
+        frame_latest = latest.copy()
+        for frame in range(int(ss["batch_steps"])):
+            ss["rt"].step()
+            frame_df = get_df()
+            frame_latest = latest_record(frame_df)
+            with overview_placeholder.container():
+                render_overview(frame_df, frame_latest, render_id=f"live_{frame}")
+            time.sleep(float(ss["sleep_s"]))
+        st.rerun()
 
 with tab_twins:
     snapshots = ss["rt"].twin_snapshot()
