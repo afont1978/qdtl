@@ -604,53 +604,131 @@ def render_audit_panel(df_local: pd.DataFrame) -> None:
     st.dataframe(df_local[cols_to_show].tail(50), use_container_width=True, height=320)
     idx = st.number_input("Record index (0-based)", min_value=0, max_value=max(0, len(df_local) - 1), value=max(0, len(df_local) - 1), step=1, key="audit_idx")
     row = df_local.iloc[int(idx)]
+
     c1, c2 = st.columns([1.2, 1.0])
     with c1:
-        st.markdown("### Decision summary")
-        st.json({
-            "step_id": int(row["step_id"]),
-            "mode": row["mode"],
-            "scenario": row["scenario"],
-            "active_event": row["active_event"],
-            "primary_hotspot_name": row.get("primary_hotspot_name"),
-            "decision_route": row["decision_route"],
-            "route_reason": row["route_reason"],
-            "exec_ms": int(row["exec_ms"]),
-            "confidence": float(row["decision_confidence"]),
-            "fallback_triggered": bool(row["fallback_triggered"]),
-            "fallback_reasons": row["fallback_reasons"],
-        })
-        st.markdown("### Urban state snapshot")
-        st.json({
-            "network_speed_index": float(row["network_speed_index"]),
-            "corridor_reliability_index": float(row["corridor_reliability_index"]),
-            "bus_bunching_index": float(row["bus_bunching_index"]),
-            "curb_occupancy_rate": float(row["curb_occupancy_rate"]),
-            "risk_score": float(row["risk_score"]),
-            "gateway_delay_index": float(row["gateway_delay_index"]),
-            "complexity_score": float(row["complexity_score"]),
-            "discrete_ratio": float(row["discrete_ratio"]),
-        })
+        render_info_table(
+            "Resumen de la decisión",
+            [
+                ("Step", str(int(row["step_id"]))),
+                ("Modo", MODE_LABELS.get(str(row["mode"]), str(row["mode"]).title())),
+                ("Escenario", SCENARIO_LABELS.get(str(row["scenario"]), str(row["scenario"]))),
+                ("Evento activo", str(row.get("active_event") or "none")),
+                ("Hotspot principal", str(row.get("primary_hotspot_name") or "No asignado")),
+                ("Ruta elegida", format_route(str(row["decision_route"]))),
+                ("Motivo", str(row.get("route_reason") or "No disponible")),
+                ("Latencia", f"{int(row['exec_ms'])} ms"),
+                ("Confianza", f"{float(row['decision_confidence'])*100:.1f}%"),
+                ("Fallback", "Sí" if bool(row["fallback_triggered"]) else "No"),
+                ("Razones de fallback", ", ".join(row["fallback_reasons"]) if isinstance(row["fallback_reasons"], list) and row["fallback_reasons"] else "—"),
+            ],
+        )
+
+        render_info_table(
+            "Estado urbano en ese instante",
+            [
+                ("Velocidad de red", fmt_num(row.get("network_speed_index"))),
+                ("Fiabilidad del corredor", fmt_num(row.get("corridor_reliability_index"))),
+                ("Bunching bus", fmt_num(row.get("bus_bunching_index"))),
+                ("Ocupación curbside", fmt_pct(row.get("curb_occupancy_rate"))),
+                ("Riesgo", fmt_num(row.get("risk_score"))),
+                ("Retraso gateway", fmt_num(row.get("gateway_delay_index"))),
+                ("Complejidad", fmt_num(row.get("complexity_score"))),
+                ("Ratio discreto", fmt_num(row.get("discrete_ratio"))),
+            ],
+        )
     with c2:
         render_hotspot_card(
             row.get("primary_hotspot_name"),
+            streets=row.get("primary_hotspot_streets"),
+            category=row.get("primary_hotspot_category"),
+            why=row.get("primary_hotspot_why"),
             note=row.get("scenario_note"),
             lat=row.get("primary_hotspot_lat"),
             lon=row.get("primary_hotspot_lon"),
         )
+
+    dispatch = safe_json_loads(row.get("dispatch_json")) or {}
+    objective = safe_json_loads(row.get("objective_breakdown_json")) or {}
+    qre = safe_json_loads(row.get("qre_json"))
+    result = safe_json_loads(row.get("result_json"))
+
     b1, b2 = st.columns(2)
     with b1:
-        st.markdown("### Dispatch")
-        st.json(safe_json_loads(row.get("dispatch_json")))
-        st.markdown("### Objective breakdown")
-        st.json(safe_json_loads(row.get("objective_breakdown_json")))
+        render_info_table(
+            "Acciones aplicadas",
+            [
+                ("Plan semafórico", str(dispatch.get("signal_plan_id", "—"))),
+                ("Offset", fmt_num(dispatch.get("offset_s"), " s")),
+                ("Prioridad bus", str(dispatch.get("bus_priority_level", "—"))),
+                ("Holding strategy", str(dispatch.get("holding_strategy", "—"))),
+                ("Ajuste de dispatch", str(dispatch.get("dispatch_adjustment", "—"))),
+                ("Coordinación semafórica", str(dispatch.get("signal_coordination_mode", "—"))),
+                ("Desvíos", str(dispatch.get("diversion_mode", "—"))),
+                ("Prioridad de carril", str(dispatch.get("lane_priority_mode", "—"))),
+                ("Política curbside", str(dispatch.get("curb_slot_policy", "—"))),
+                ("Nivel de enforcement", str(dispatch.get("enforcement_level", "—"))),
+                ("Ventanas de acceso", str(dispatch.get("access_window_mode", "—"))),
+                ("Protección peatonal", "Activa" if int(dispatch.get("ped_protection_mode", 0) or 0) == 1 else "No"),
+                ("Mitigación de velocidad", "Activa" if int(dispatch.get("speed_mitigation_mode", 0) or 0) == 1 else "No"),
+                ("Alerta preventiva", str(dispatch.get("preventive_alert_level", "—"))),
+            ],
+        )
+
+        render_info_table(
+            "Impacto estimado de la decisión",
+            [
+                ("Penalización por retraso", fmt_num(objective.get("delay_penalty"))),
+                ("Penalización por bunching", fmt_num(objective.get("bunching_penalty"))),
+                ("Penalización por riesgo", fmt_num(objective.get("risk_penalty"))),
+                ("Penalización curbside", fmt_num(objective.get("curb_penalty"))),
+                ("Penalización gateway", fmt_num(objective.get("gateway_penalty"))),
+            ],
+        )
     with b2:
-        st.markdown("### Quantum Request Envelope")
-        qre = safe_json_loads(row.get("qre_json"))
-        st.json(qre if qre else {"info": "No QRE generated on this step."})
-        st.markdown("### Quantum Result")
-        result = safe_json_loads(row.get("result_json"))
-        st.json(result if result else {"info": "No quantum result on this step."})
+        st.markdown("### Capa híbrida / cuántica")
+        if qre:
+            render_info_table(
+                "Solicitud híbrida",
+                [
+                    ("Estado", "Generada"),
+                    ("Modo", str(qre.get("mode", "—")) if isinstance(qre, dict) else "—"),
+                    ("Escenario", str(qre.get("scenario", "—")) if isinstance(qre, dict) else "—"),
+                    ("Objetivo", str(qre.get("objective_name", "—")) if isinstance(qre, dict) else "—"),
+                    ("Complejidad", fmt_num(qre.get("complexity_score")) if isinstance(qre, dict) else "—"),
+                    ("Ratio discreto", fmt_num(qre.get("discrete_ratio")) if isinstance(qre, dict) else "—"),
+                ],
+            )
+        else:
+            st.info("En este step no se generó solicitud híbrida/cuántica.")
+
+        if result:
+            backend = result.get("backend", {}) if isinstance(result, dict) else {}
+            sol = result.get("solution", {}) if isinstance(result, dict) else {}
+            render_info_table(
+                "Resultado híbrido",
+                [
+                    ("Estado", str(result.get("status", "—")) if isinstance(result, dict) else "—"),
+                    ("Proveedor", str(backend.get("provider", "—"))),
+                    ("Backend", str(backend.get("backend_id", "—"))),
+                    ("Queue", fmt_num(backend.get("queue_ms"), " ms")),
+                    ("Ejecución", fmt_num(backend.get("exec_ms"), " ms")),
+                    ("Confianza del resultado", f"{float(sol.get('confidence', 0))*100:.1f}%" if sol else "—"),
+                ],
+            )
+        else:
+            st.info("No hubo resultado cuántico en este step.")
+
+        with st.expander("Detalle técnico completo"):
+            st.markdown("**Dispatch (crudo)**")
+            st.json(dispatch)
+            st.markdown("**Objective breakdown (crudo)**")
+            st.json(objective)
+            st.markdown("**QRE (crudo)**")
+            st.json(qre if qre else {"info": "No QRE generated on this step."})
+            st.markdown("**Quantum result (crudo)**")
+            st.json(result if result else {"info": "No quantum result on this step."})
+
     csv_bytes = df_local.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", data=csv_bytes, file_name="mobility_control_room_run.csv", mime="text/csv", key="dl_mobility_csv")
 
