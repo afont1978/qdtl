@@ -512,6 +512,115 @@ def render_audit_panel(df_local: pd.DataFrame) -> None:
     st.download_button("Download CSV", data=csv_bytes, file_name="mobility_control_room_run.csv", mime="text/csv", key="dl_mobility_csv")
 
 
+def _native_line(df_local: pd.DataFrame, cols: dict[str, str]) -> pd.DataFrame:
+    if df_local.empty:
+        return pd.DataFrame()
+    available = {k: v for k, v in cols.items() if k in df_local.columns}
+    if not available:
+        return pd.DataFrame()
+    out = df_local[list(available.keys())].copy()
+    out.columns = list(available.values())
+    return out
+
+
+def render_live_monitor_native(df_local: pd.DataFrame, latest_local: Dict[str, Any], focus: str) -> None:
+    st.markdown('### Live Monitor')
+    if df_local.empty:
+        st.info('No live data yet. Press Step or Start.')
+        return
+
+    live_df = df_local.tail(int(st.session_state['live_window'])).copy()
+    if 'step_id' in live_df.columns:
+        live_df = live_df.set_index('step_id')
+
+    q_share = (df_local['decision_route'] == 'QUANTUM').mean() * 100.0 if len(df_local) else 0.0
+    fb_rate = df_local['fallback_triggered'].mean() * 100.0 if len(df_local) else 0.0
+    avg_latency = float(df_local['exec_ms'].tail(24).mean()) if len(df_local) else 0.0
+
+    row = st.columns(5)
+    row[0].metric('Mode', MODE_LABELS.get(str(latest_local.get('mode', '')), str(latest_local.get('mode', ''))))
+    row[1].metric('Active event', str(latest_local.get('active_event') or 'none'))
+    row[2].metric('Route', str(latest_local.get('decision_route', '-')))
+    row[3].metric('Quantum share', f'{q_share:.1f}%')
+    row[4].metric('Avg latency', f'{avg_latency:.0f} ms', f'Fallback {fb_rate:.1f}%')
+
+    if focus == 'Overview':
+        c1, c2 = st.columns(2)
+        with c1:
+            chart_df = _native_line(live_df, {
+                'network_speed_index': 'Network speed',
+                'corridor_reliability_index': 'Corridor reliability',
+                'step_operational_score': 'Operational score',
+            })
+            st.line_chart(chart_df, height=280, use_container_width=True)
+        with c2:
+            chart_df = _native_line(live_df, {
+                'bus_bunching_index': 'Bus bunching',
+                'curb_occupancy_rate': 'Curb occupancy',
+                'risk_score': 'Risk score',
+            })
+            st.line_chart(chart_df, height=280, use_container_width=True)
+    elif focus == 'Mobility Twins':
+        twin_sel = st.session_state.get('mobility_twin_sel', 'intersection')
+        st.caption(f'Live focus: {twin_sel}')
+        c1, c2 = st.columns(2)
+        if twin_sel == 'intersection':
+            with c1:
+                st.line_chart(_native_line(live_df, {'corridor_delay_s': 'Delay s'}), height=260, use_container_width=True)
+            with c2:
+                st.line_chart(_native_line(live_df, {'risk_score': 'Risk'}), height=260, use_container_width=True)
+        elif twin_sel == 'road_corridor':
+            with c1:
+                st.line_chart(_native_line(live_df, {
+                    'network_speed_index': 'Speed index',
+                    'corridor_reliability_index': 'Reliability',
+                }), height=260, use_container_width=True)
+            with c2:
+                st.line_chart(_native_line(live_df, {'gateway_delay_index': 'Gateway delay'}), height=260, use_container_width=True)
+        elif twin_sel == 'bus_corridor':
+            with c1:
+                st.line_chart(_native_line(live_df, {'bus_bunching_index': 'Bunching'}), height=260, use_container_width=True)
+            with c2:
+                st.line_chart(_native_line(live_df, {
+                    'bus_commercial_speed_kmh': 'Commercial speed',
+                    'bus_priority_requests': 'Priority requests',
+                }), height=260, use_container_width=True)
+        elif twin_sel == 'curb_zone':
+            with c1:
+                st.line_chart(_native_line(live_df, {
+                    'curb_occupancy_rate': 'Occupancy',
+                    'illegal_curb_occupancy_rate': 'Illegal occupancy',
+                }), height=260, use_container_width=True)
+            with c2:
+                st.line_chart(_native_line(live_df, {'delivery_queue': 'Delivery queue'}), height=260, use_container_width=True)
+        else:
+            with c1:
+                st.line_chart(_native_line(live_df, {
+                    'risk_score': 'Risk',
+                    'near_miss_index': 'Near-miss',
+                }), height=260, use_container_width=True)
+            with c2:
+                st.line_chart(_native_line(live_df, {
+                    'pedestrian_exposure': 'Ped exposure',
+                    'bike_conflict_index': 'Bike conflict',
+                }), height=260, use_container_width=True)
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.line_chart(_native_line(live_df, {
+                'risk_score': 'Risk',
+                'near_miss_index': 'Near-miss',
+            }), height=260, use_container_width=True)
+        with c2:
+            st.line_chart(_native_line(live_df, {
+                'pedestrian_exposure': 'Ped exposure',
+                'bike_conflict_index': 'Bike conflict',
+            }), height=260, use_container_width=True)
+
+    if latest_local.get('route_reason'):
+        st.caption(str(latest_local.get('route_reason')))
+
+
 init_state()
 ss = st.session_state
 
@@ -536,8 +645,6 @@ with st.sidebar:
 
     st.divider()
     ss["live_window"] = st.slider("Visible live window (steps)", 12, 96, int(ss["live_window"]), step=6)
-    ss["batch_steps"] = st.slider("Steps per visible run", 1, 24, int(ss["batch_steps"]), step=1)
-    ss["sleep_s"] = st.slider("Delay between visible steps (s)", 0.05, 1.00, float(ss["sleep_s"]), step=0.05)
     ss["live_focus"] = st.selectbox("Live focus", ["Overview", "Mobility Twins", "Risk & Prevention"], index=["Overview", "Mobility Twins", "Risk & Prevention"].index(ss["live_focus"]))
 
     st.divider()
@@ -545,9 +652,11 @@ with st.sidebar:
     with c1:
         if st.button("▶ Start", use_container_width=True):
             ss["running"] = True
+            st.rerun()
     with c2:
         if st.button("⏸ Pause", use_container_width=True):
             ss["running"] = False
+            st.rerun()
 
     c3, c4 = st.columns(2)
     with c3:
@@ -570,17 +679,32 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+@st.fragment(run_every=0.25)
+def live_fragment() -> None:
+    if ss["running"]:
+        ss["rt"].step()
+    frag_df = get_df()
+    frag_latest = latest_record(frag_df)
+    render_live_monitor_native(frag_df, frag_latest, ss["live_focus"])
+
+live_fragment()
+
 df = get_df()
 latest = latest_record(df)
 if latest.get("scenario_note"):
     st.caption(str(latest.get("scenario_note")))
 
+st.markdown("### Detailed views (stable snapshots)")
+st.caption("These tabs are kept stable to minimize flicker. The live evolution is shown above in Live Monitor.")
+
 tab_overview, tab_twins, tab_risk, tab_audit = st.tabs(
     ["Overview", "Mobility Twins", "Risk & Prevention", "Audit & Orchestration"]
 )
 
+snapshots = ss["rt"].twin_snapshot()
+
 with tab_overview:
-    overview_placeholder = st.empty()
+    render_overview(df, latest, render_id="static")
 
 with tab_twins:
     st.selectbox(
@@ -589,59 +713,10 @@ with tab_twins:
         index=["intersection", "road_corridor", "bus_corridor", "curb_zone", "risk_hotspot"].index(ss["mobility_twin_sel"]),
         key="mobility_twin_sel",
     )
-    twins_placeholder = st.empty()
+    render_twins_panel(df, snapshots, ss["mobility_twin_sel"], render_id="static")
 
 with tab_risk:
-    risk_placeholder = st.empty()
+    render_risk_panel(df, latest, render_id="static")
 
 with tab_audit:
     render_audit_panel(df)
-
-# Fill live/static content for the dynamic tabs
-focus = ss["live_focus"]
-snapshots = ss["rt"].twin_snapshot()
-
-if not ss["running"]:
-    with overview_placeholder.container():
-        render_overview(df, latest, render_id="static")
-    with twins_placeholder.container():
-        render_twins_panel(df, snapshots, ss["mobility_twin_sel"], render_id="static")
-    with risk_placeholder.container():
-        render_risk_panel(df, latest, render_id="static")
-else:
-    # Freeze non-focused tabs to reduce flicker; only one live surface updates.
-    with overview_placeholder.container():
-        if focus == "Overview":
-            render_overview_live_compact(df, latest, render_id="focus_initial")
-        else:
-            render_overview(df, latest, render_id="frozen")
-    with twins_placeholder.container():
-        if focus == "Mobility Twins":
-            render_twins_live_compact(df, ss["mobility_twin_sel"], render_id="focus_initial")
-        else:
-            render_twins_panel(df, snapshots, ss["mobility_twin_sel"], render_id="frozen")
-    with risk_placeholder.container():
-        if focus == "Risk & Prevention":
-            render_risk_live_compact(df, latest, render_id="focus_initial")
-        else:
-            render_risk_panel(df, latest, render_id="frozen")
-
-    for frame in range(int(ss["batch_steps"])):
-        ss["rt"].step()
-        frame_df = get_df()
-        frame_latest = latest_record(frame_df)
-        snapshots = ss["rt"].twin_snapshot()
-
-        if focus == "Overview":
-            with overview_placeholder.container():
-                render_overview_live_compact(frame_df, frame_latest, render_id=f"overview_live_{frame}")
-        elif focus == "Mobility Twins":
-            with twins_placeholder.container():
-                render_twins_live_compact(frame_df, ss["mobility_twin_sel"], render_id=f"twins_live_{frame}")
-        elif focus == "Risk & Prevention":
-            with risk_placeholder.container():
-                render_risk_live_compact(frame_df, frame_latest, render_id=f"risk_live_{frame}")
-
-        time.sleep(float(ss["sleep_s"]))
-
-    st.rerun()
